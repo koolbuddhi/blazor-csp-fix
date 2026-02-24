@@ -48,16 +48,24 @@ public class CspMiddleware
         }
         else
         {
-            // MODE 2: SECURE — nonce-based CSP, no unsafe directives
+            // MODE 2: SECURE — nonce-based CSP, no unsafe directives for scripts
             var scriptSrc = $"script-src 'self' 'nonce-{nonce}'";
-            var styleSrc = $"style-src 'self' 'nonce-{nonce}'";
+
+            // style-src uses 'unsafe-inline' because CSP nonces only protect <style>
+            // tags, not inline style="" attributes on elements. Radzen (and many UI
+            // libraries) rely on element-level inline styles for positioning, sizing,
+            // and visibility (e.g., display:none on popups). Without 'unsafe-inline',
+            // these styles are blocked on initial SSR render, causing DatePicker popups
+            // to appear open, DropDown panels to leak through, and Charts to collapse.
+            // This is an accepted trade-off: CSS injection attacks are far more limited
+            // than script injection, and script-src remains strictly nonce-based.
+            var styleSrc = "style-src 'self' 'unsafe-inline'";
 
             // In Development, add unsafe-inline alongside nonce for hot-reload compatibility.
             // CSP Level 2+ browsers ignore unsafe-inline when a nonce is present.
             if (env.IsDevelopment())
             {
                 scriptSrc = $"script-src 'self' 'unsafe-inline' 'nonce-{nonce}'";
-                styleSrc = "style-src 'self' 'unsafe-inline'";
             }
 
             csp = string.Join("; ",

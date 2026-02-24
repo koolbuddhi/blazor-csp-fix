@@ -37,12 +37,16 @@ public class CspSecureHeaderTests : IClassFixture<CspWebApplicationFactory>, IDi
     }
 
     [Fact]
-    public async Task StyleSrc_ContainsNonce()
+    public async Task StyleSrc_AllowsUnsafeInline()
     {
+        // style-src uses 'unsafe-inline' instead of nonce because CSP nonces
+        // cannot protect inline style="" attributes on elements. Radzen and
+        // other UI libraries rely on element-level inline styles for sizing,
+        // positioning, and visibility (e.g., display:none on popups).
         var csp = await GetCspHeader();
         var styleSrc = CspHeaderParser.GetDirective(csp, "style-src");
         styleSrc.Should().NotBeNull();
-        styleSrc.Should().Contain("'nonce-");
+        styleSrc.Should().Contain("'unsafe-inline'");
     }
 
     [Fact]
@@ -75,16 +79,14 @@ public class CspSecureHeaderTests : IClassFixture<CspWebApplicationFactory>, IDi
     }
 
     [Fact]
-    public async Task ScriptSrc_And_StyleSrc_ShareSameNonce()
+    public async Task StyleSrc_DoesNotContainNonce()
     {
+        // style-src should NOT have a nonce — nonces on style-src only protect
+        // <style> tags, not inline style="" attributes. Using 'unsafe-inline'
+        // for styles is the accepted trade-off for Radzen compatibility.
         var csp = await GetCspHeader();
-        var scriptSrc = CspHeaderParser.GetDirective(csp, "script-src")!;
         var styleSrc = CspHeaderParser.GetDirective(csp, "style-src")!;
-
-        var scriptNonce = CspHeaderParser.ExtractNonce(scriptSrc);
         var styleNonce = CspHeaderParser.ExtractNonce(styleSrc);
-
-        scriptNonce.Should().NotBeNullOrEmpty();
-        scriptNonce.Should().Be(styleNonce);
+        styleNonce.Should().BeNull();
     }
 }

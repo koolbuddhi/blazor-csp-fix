@@ -144,11 +144,12 @@ else
     fail "Nonce missing in CSP"
 fi
 
-# 3. No unsafe-inline in Secure production mode
-if echo "$CSP" | grep -q "'unsafe-inline'"; then
-    fail "unsafe-inline found in Secure production CSP"
+# 3. No unsafe-inline in script-src (style-src allows it for Radzen compatibility)
+SCRIPT_SRC=$(echo "$CSP" | grep -o "script-src [^;]*")
+if echo "$SCRIPT_SRC" | grep -q "'unsafe-inline'"; then
+    fail "unsafe-inline found in script-src"
 else
-    pass "No unsafe-inline in Secure production CSP"
+    pass "No unsafe-inline in script-src"
 fi
 
 # 4. No unsafe-eval
