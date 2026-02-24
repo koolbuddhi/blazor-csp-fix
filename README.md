@@ -24,7 +24,7 @@ Security reviews commonly flag Blazor Server apps for using `unsafe-inline` and 
 
 ```
 BlazorCspDemo/
-├── Program.cs                          # Service registration + middleware pipeline
+├── Program.cs                          # Service registration + middleware pipeline + upload APIs
 ├── appsettings.json                    # Contains "CspMode": "Secure" | "Insecure"
 ├── Services/
 │   └── BlazorNonceService.cs           # Scoped CircuitHandler holding per-request nonce
@@ -39,14 +39,36 @@ BlazorCspDemo/
 │       ├── Home.razor                  # Landing page explaining both modes
 │       ├── Counter.razor               # JS interop demo under CSP
 │       ├── CspDemo.razor               # 4 live CSP tests with pass/fail indicators
-│       └── RadzenDemo.razor            # 10 Radzen components for CSP compatibility testing
+│       ├── RadzenDemo.razor            # 10 Radzen components for CSP compatibility testing
+│       └── UploadDemo.razor            # File upload CSP bypass demonstration
 ├── wwwroot/
-│   └── js/
-│       └── csp-test.js                 # External JS test functions (eval, dynamic scripts, etc.)
+│   ├── js/
+│   │   └── csp-test.js                 # External JS test functions + upload attack simulation
+│   └── uploads/                        # Insecure upload storage (served as static files)
+├── Data/
+│   └── uploads/                        # Secure upload storage (outside wwwroot)
 └── doc/
     ├── blazor-server-csp-fix-instructions.md   # Step-by-step fix instructions
     ├── implementation-plan.md                   # Architecture decisions and rationale
     └── validation-guide.md                      # Detailed testing checklist
+
+BlazorCspDemo.Tests/
+├── Helpers/
+│   └── CspTestHelpers.cs              # Shared WebApplicationFactory + CSP header parser
+├── Integration/                        # Tier 1: HTTP header tests (fast, no browser)
+│   ├── CspSecureHeaderTests.cs         # 6 tests: nonce present, no unsafe-*, base64 validation
+│   ├── CspInsecureHeaderTests.cs       # 4 tests: unsafe-* present, no nonce in header
+│   ├── CspNonceRotationTests.cs        # 2 tests: unique nonce per request
+│   ├── SecurityHeaderTests.cs          # 5 tests: X-Frame-Options, X-Content-Type, etc.
+│   ├── StaticFileHeaderTests.cs        # 4 tests: static files skip CSP middleware
+│   ├── CspDefaultModeTests.cs          # 1 test: missing config defaults to Secure
+│   └── CspDevelopmentModeTests.cs      # 3 tests: dev vs prod CSP differences
+├── Playwright/                         # Tier 2: Browser tests (real Chromium)
+│   ├── PlaywrightFixture.cs            # Kestrel server + Playwright browser bootstrap
+│   ├── CspSecureBrowserTests.cs        # 5 tests: eval blocked, dynamic script blocked, etc.
+│   └── CspInsecureBrowserTests.cs      # 3 tests: eval succeeds, Blazor loads, JS interop
+└── Scripts/
+    └── security-scan.sh                # Tier 3: curl-based header checks + optional OWASP ZAP
 ```
 
 ---
@@ -102,6 +124,11 @@ CspMiddleware
 
 **NavMenu fix** — The default Blazor template includes an inline `onclick` handler in `NavMenu.razor` for mobile nav toggling. This violates CSP. We replaced it with an `addEventListener` in the external JS file — a common pattern when hardening Blazor apps for CSP.
 
+**Upload API endpoints** — Three minimal API endpoints demonstrate insecure vs secure file upload patterns:
+- `POST /api/upload/insecure` — Accepts any file, saves to `wwwroot/uploads/` (served as static files from `'self'`)
+- `POST /api/upload/secure` — Validates file extension (only docx/pdf/images), saves outside wwwroot with a GUID filename
+- `GET /api/download/{id}` — Serves securely-uploaded files with `Content-Type: application/octet-stream` and `Content-Disposition: attachment`
+
 ---
 
 ## Prerequisites
@@ -139,7 +166,11 @@ dotnet run --CspMode=Insecure
 In Development, the middleware relaxes CSP for hot-reload. To test the strict production CSP:
 
 ```bash
-ASPNETCORE_ENVIRONMENT=Production dotnet run
+# HTTP + HTTPS (uses dev certificate)
+ASPNETCORE_ENVIRONMENT=Production ASPNETCORE_URLS="https://localhost:7029;http://localhost:5180" dotnet run --no-launch-profile
+
+# HTTP only (no certificate needed)
+ASPNETCORE_ENVIRONMENT=Production ASPNETCORE_URLS="http://localhost:5180" dotnet run --no-launch-profile
 ```
 
 ---
@@ -161,6 +192,23 @@ Four live tests that demonstrate CSP enforcement:
 
 ### Counter (`/counter`)
 Two increment buttons — pure C# and JS interop — proving that external JS interop works under both CSP modes.
+
+### Upload Demo (`/upload-demo`)
+Demonstrates why Google's CSP Evaluator flags `'self'` in `script-src` as a medium risk. If your app serves user-uploaded files as static content from the same origin, an attacker can upload a `.js` file and load it as a script — bypassing nonce-based CSP entirely.
+
+The page has three sections:
+
+**Insecure Upload (red card)** — Files saved to `wwwroot/uploads/` and served as static files via `UseStaticFiles()`. Since they come from the same origin, CSP treats them as `'self'`.
+
+**Secure Upload (green card)** — Files validated (only docx/pdf/images), renamed with a GUID, stored outside wwwroot in `Data/uploads/`, and served via an API endpoint with `Content-Type: application/octet-stream` and `Content-Disposition: attachment`.
+
+**Attack Simulation** — Uploads a crafted `.js` file to the insecure endpoint, then loads it as a `<script>` tag. Since the script is from `'self'`, CSP allows it even in Secure nonce mode.
+
+| Scenario | CSP Mode | Upload Path | Script Executes? | Why |
+|----------|----------|-------------|-----------------|-----|
+| Upload .js to insecure path | **Secure** (nonce) | `wwwroot/uploads/` | **YES** | Script is from `'self'` |
+| Upload .js to insecure path | Insecure | `wwwroot/uploads/` | **YES** | `unsafe-inline` allows everything |
+| Upload .js to secure path | **Secure** (nonce) | `Data/uploads/` | **NO** | File type rejected; served as attachment |
 
 ### Radzen Demo (`/radzen-demo`)
 Ten Radzen components tested for CSP compatibility:
@@ -236,6 +284,65 @@ See [`doc/validation-guide.md`](doc/validation-guide.md) for a complete step-by-
 | SignalR connection | Yes | Yes |
 | External JS interop | Yes | Yes |
 | Radzen components | Partially (see above) | Yes |
+
+---
+
+## Automated Tests
+
+The project includes a comprehensive test suite across three tiers. All 33 tests + 15 scan checks pass.
+
+### Prerequisites
+
+- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- For Tier 2: Playwright Chromium browser (installed automatically, see below)
+- For Tier 3 ZAP scan: Docker (optional)
+
+### Tier 1: Integration Tests (25 tests, ~1.5s)
+
+HTTP header validation using `WebApplicationFactory` — no browser needed.
+
+```bash
+dotnet test --filter "FullyQualifiedName~Integration"
+```
+
+Covers: nonce presence/rotation/format, `unsafe-inline`/`unsafe-eval` presence/absence, security headers (X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy), static file header isolation, default mode fail-safe, and dev vs production CSP differences.
+
+### Tier 2: Playwright Browser Tests (8 tests, ~21s)
+
+End-to-end tests using headless Chromium with a real Kestrel server and SignalR.
+
+```bash
+# Install Playwright Chromium (first time only)
+# From the test project's bin directory, use the bundled Playwright CLI:
+PLAYWRIGHT_BROWSERS_PATH=$HOME/Library/Caches/ms-playwright \
+  BlazorCspDemo.Tests/bin/Debug/net8.0/.playwright/node/darwin-arm64/node \
+  BlazorCspDemo.Tests/bin/Debug/net8.0/.playwright/package/cli.js install chromium
+
+# Run tests
+dotnet test --filter "FullyQualifiedName~Playwright"
+```
+
+Covers: Blazor SignalR connection in both modes, eval() blocked/allowed, dynamic script injection blocked, nonced inline script execution, external JS interop, and counter JS interop.
+
+### Tier 3: Security Scan Script (15 checks)
+
+Curl-based CSP and security header checks against a running instance.
+
+```bash
+# Run scan
+./BlazorCspDemo.Tests/Scripts/security-scan.sh
+
+# Run scan + OWASP ZAP baseline (requires Docker)
+./BlazorCspDemo.Tests/Scripts/security-scan.sh --zap
+```
+
+Produces `security-scan-report.txt` with PASS/FAIL counts.
+
+### Run All Tests
+
+```bash
+dotnet test
+```
 
 ---
 
