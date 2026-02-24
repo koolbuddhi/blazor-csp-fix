@@ -5,7 +5,8 @@ set -euo pipefail
 # Runs curl-based CSP and security header checks against the Blazor app.
 # Usage:
 #   ./security-scan.sh              # curl checks only
-#   ./security-scan.sh --zap        # + OWASP ZAP baseline scan (requires Docker)
+#   ./security-scan.sh --zap        # + OWASP ZAP baseline scan (passive, ~1-2 min)
+#   ./security-scan.sh --zap-full   # + OWASP ZAP full scan (active spider + attack, ~5-15 min)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../../BlazorCspDemo" && pwd)"
@@ -13,12 +14,28 @@ REPORT_FILE="$SCRIPT_DIR/security-scan-report.txt"
 PORT=5199
 BASE_URL="http://127.0.0.1:$PORT"
 RUN_ZAP=false
+RUN_ZAP_FULL=false
 PASS=0
 FAIL=0
 SERVER_PID=""
 
-if [[ "${1:-}" == "--zap" ]]; then
-    RUN_ZAP=true
+case "${1:-}" in
+    --zap)      RUN_ZAP=true ;;
+    --zap-full) RUN_ZAP_FULL=true ;;
+esac
+
+# --- Resolve container runtime (docker or podman) ---
+
+CONTAINER_CMD=""
+IS_PODMAN=false
+if command -v docker &> /dev/null; then
+    CONTAINER_CMD="docker"
+    if docker --version 2>/dev/null | grep -qi podman; then
+        IS_PODMAN=true
+    fi
+elif command -v podman &> /dev/null; then
+    CONTAINER_CMD="podman"
+    IS_PODMAN=true
 fi
 
 # --- Helpers ---
@@ -211,12 +228,14 @@ if $RUN_ZAP; then
     log ""
     log "=== OWASP ZAP Baseline Scan ==="
 
-    start_server "Secure"
+    if [[ -z "$CONTAINER_CMD" ]]; then
+        log "  [SKIP] Docker/Podman not available — skipping ZAP baseline scan"
+    else
+        start_server "Secure"
 
-    if command -v docker &> /dev/null; then
         ZAP_REPORT="$SCRIPT_DIR/zap-report.html"
         log "Running ZAP baseline scan against $BASE_URL..."
-        docker run --rm --network=host \
+        $CONTAINER_CMD run --rm --network=host \
             -v "$SCRIPT_DIR:/zap/wrk/:rw" \
             ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
             -t "$BASE_URL" \
@@ -227,11 +246,99 @@ if $RUN_ZAP; then
         else
             fail "ZAP report not generated"
         fi
-    else
-        log "  [SKIP] Docker not available — skipping ZAP scan"
-    fi
 
-    stop_server
+        stop_server
+    fi
+fi
+
+# ==========================================
+# OPTIONAL: OWASP ZAP Full Scan (Active)
+# ==========================================
+
+if $RUN_ZAP_FULL; then
+    log ""
+    log "=== OWASP ZAP Full Scan (Active) ==="
+
+    if [[ -z "$CONTAINER_CMD" ]]; then
+        log "  [SKIP] Docker/Podman not available — skipping ZAP full scan"
+    else
+        # Detect Podman vs Docker for correct host networking.
+        # On macOS, --network=host doesn't work with Podman/Docker Desktop.
+        # Instead, use host.containers.internal (Podman) or host.docker.internal (Docker Desktop).
+        ZAP_TARGET_HOST="127.0.0.1"
+        NETWORK_FLAG="--network=host"
+        if $IS_PODMAN; then
+            ZAP_TARGET_HOST="host.containers.internal"
+            NETWORK_FLAG=""
+            log "Detected Podman — using $ZAP_TARGET_HOST to reach host"
+        elif [[ "$(uname)" == "Darwin" ]]; then
+            ZAP_TARGET_HOST="host.docker.internal"
+            NETWORK_FLAG=""
+            log "Detected Docker on macOS — using $ZAP_TARGET_HOST to reach host"
+        fi
+        ZAP_TARGET_URL="http://${ZAP_TARGET_HOST}:${PORT}"
+
+        # Create a temp working directory with open permissions.
+        # Rootless Podman maps the container's zap user (UID 1000) to an
+        # unprivileged host UID, so the mounted volume must be world-writable.
+        ZAP_WORK_DIR=$(mktemp -d)
+        chmod 777 "$ZAP_WORK_DIR"
+        cp "$SCRIPT_DIR/zap-config.conf" "$ZAP_WORK_DIR/"
+        trap 'rm -rf "$ZAP_WORK_DIR"; cleanup' EXIT
+
+        # --- Full scan: Secure mode ---
+        start_server "Secure"
+
+        ZAP_FULL_REPORT="$SCRIPT_DIR/zap-full-report.html"
+        log "Running ZAP full scan against $ZAP_TARGET_URL (Secure mode)..."
+        log "This performs active spidering and attack testing — may take 5-15 minutes."
+
+        $CONTAINER_CMD run --rm $NETWORK_FLAG \
+            -v "$ZAP_WORK_DIR:/zap/wrk/:rw" \
+            ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py \
+            -t "$ZAP_TARGET_URL" \
+            -r zap-full-report.html \
+            -c zap-config.conf \
+            -m 10 \
+            -z "-config spider.maxDepth=5 -config spider.threadCount=5" \
+            -I 2>&1 | tee -a "$REPORT_FILE" || true
+
+        cp "$ZAP_WORK_DIR/zap-full-report.html" "$ZAP_FULL_REPORT" 2>/dev/null || true
+        if [[ -f "$ZAP_FULL_REPORT" ]]; then
+            pass "ZAP full scan report generated at $ZAP_FULL_REPORT"
+        else
+            fail "ZAP full scan report not generated"
+        fi
+
+        stop_server
+
+        # --- Full scan: Insecure mode (comparison) ---
+        start_server "Insecure"
+
+        ZAP_FULL_INSECURE_REPORT="$SCRIPT_DIR/zap-full-report-insecure.html"
+        log ""
+        log "Running ZAP full scan against $ZAP_TARGET_URL (Insecure mode)..."
+
+        $CONTAINER_CMD run --rm $NETWORK_FLAG \
+            -v "$ZAP_WORK_DIR:/zap/wrk/:rw" \
+            ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py \
+            -t "$ZAP_TARGET_URL" \
+            -r zap-full-report-insecure.html \
+            -c zap-config.conf \
+            -m 10 \
+            -z "-config spider.maxDepth=5 -config spider.threadCount=5" \
+            -I 2>&1 | tee -a "$REPORT_FILE" || true
+
+        cp "$ZAP_WORK_DIR/zap-full-report-insecure.html" "$ZAP_FULL_INSECURE_REPORT" 2>/dev/null || true
+        if [[ -f "$ZAP_FULL_INSECURE_REPORT" ]]; then
+            pass "ZAP full scan report (Insecure) generated at $ZAP_FULL_INSECURE_REPORT"
+        else
+            fail "ZAP full scan report (Insecure) not generated"
+        fi
+
+        stop_server
+        rm -rf "$ZAP_WORK_DIR"
+    fi
 fi
 
 # ==========================================

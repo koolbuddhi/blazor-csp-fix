@@ -49,3 +49,15 @@ Thumbs.db
 *.pfx
 *.publishsettings
 appsettings.*.local.json
+
+## Node
+node_modules/
+package-lock.json
+
+## ZAP scan reports (generated artifacts)
+BlazorCspDemo.Tests/Scripts/zap-*.html
+BlazorCspDemo.Tests/Scripts/zap-report.html
+BlazorCspDemo.Tests/Scripts/security-scan-report.txt
+
+## Uploaded test files
+BlazorCspDemo/wwwroot/uploads/

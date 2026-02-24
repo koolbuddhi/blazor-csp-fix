@@ -24,6 +24,11 @@ public class CspMiddleware
 
         var env = context.RequestServices.GetRequiredService<IWebHostEnvironment>();
 
+        // Restrict WebSocket connections to the app's own host rather than
+        // allowing any host via bare wss:/ws: protocol schemes (ZAP 10055).
+        var host = context.Request.Host.ToString();
+        var connectSrc = $"connect-src 'self' wss://{host} ws://{host}";
+
         string csp;
 
         if (cspMode.Equals("Insecure", StringComparison.OrdinalIgnoreCase))
@@ -35,7 +40,7 @@ public class CspMiddleware
                 "style-src 'self' 'unsafe-inline'",
                 "img-src 'self' data:",
                 "font-src 'self'",
-                "connect-src 'self' wss: ws:",
+                connectSrc,
                 "frame-ancestors 'none'",
                 "base-uri 'self'",
                 "form-action 'self'"
@@ -61,7 +66,7 @@ public class CspMiddleware
                 styleSrc,
                 "img-src 'self' data:",
                 "font-src 'self'",
-                "connect-src 'self' wss: ws:",
+                connectSrc,
                 "frame-ancestors 'none'",
                 "base-uri 'self'",
                 "form-action 'self'"

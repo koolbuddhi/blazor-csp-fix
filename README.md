@@ -68,7 +68,8 @@ BlazorCspDemo.Tests/
 │   ├── CspSecureBrowserTests.cs        # 5 tests: eval blocked, dynamic script blocked, etc.
 │   └── CspInsecureBrowserTests.cs      # 3 tests: eval succeeds, Blazor loads, JS interop
 └── Scripts/
-    └── security-scan.sh                # Tier 3: curl-based header checks + optional OWASP ZAP
+    ├── security-scan.sh                # Tier 3: curl-based header checks + optional OWASP ZAP
+    └── zap-config.conf                 # ZAP scan rule configuration (disable noise, set thresholds)
 ```
 
 ---
@@ -329,14 +330,32 @@ Covers: Blazor SignalR connection in both modes, eval() blocked/allowed, dynamic
 Curl-based CSP and security header checks against a running instance.
 
 ```bash
-# Run scan
+# Run scan (curl checks only)
 ./BlazorCspDemo.Tests/Scripts/security-scan.sh
 
-# Run scan + OWASP ZAP baseline (requires Docker)
+# Run scan + OWASP ZAP baseline (passive only, ~1-2 min)
 ./BlazorCspDemo.Tests/Scripts/security-scan.sh --zap
+
+# Run scan + OWASP ZAP full scan (active spider + attack testing, ~5-15 min)
+./BlazorCspDemo.Tests/Scripts/security-scan.sh --zap-full
 ```
 
 Produces `security-scan-report.txt` with PASS/FAIL counts.
+
+**ZAP scan modes:**
+
+| Flag | Mode | What it does | Runtime |
+|------|------|-------------|---------|
+| `--zap` | Baseline | Passive checks only — inspects headers and responses, no attack traffic | ~1-2 min |
+| `--zap-full` | Full | Active spider + active scan — crawls the app, sends attack payloads (XSS, injection, path traversal), tests CSP bypass vectors | ~5-15 min |
+
+The full scan runs against both **Secure** and **Insecure** modes, producing two HTML reports for comparison:
+- `zap-full-report.html` — Secure mode findings
+- `zap-full-report-insecure.html` — Insecure mode findings
+
+Scan rules are configured in `zap-config.conf` — SQL injection and other irrelevant rules are disabled for faster scans.
+
+Requires Docker or Podman (with Docker alias). The ZAP Docker image (`ghcr.io/zaproxy/zaproxy:stable`, ~1.5 GB) is pulled automatically on first run.
 
 ### Run All Tests
 
