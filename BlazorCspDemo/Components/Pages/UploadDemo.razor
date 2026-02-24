@@ -1,0 +1,354 @@
+@page "/upload-demo"
+@rendermode InteractiveServer
+@using BlazorCspDemo.Services
+@inject BlazorNonceService NonceService
+@inject IConfiguration Configuration
+@inject IJSRuntime JSRuntime
+
+<PageTitle>Upload CSP Bypass Demo</PageTitle>
+
+<h1>File Upload CSP Bypass Demo</h1>
+
+<div class="alert @(_isSecure ? "alert-warning" : "alert-info") mb-4">
+    <strong>Current CSP Mode:</strong> @(_isSecure ? "Secure (Nonce-based)" : "Insecure (unsafe-inline / unsafe-eval)")
+    <br />
+    <text>This page demonstrates why Google's CSP Evaluator flags <code>'self'</code> in <code>script-src</code> as a risk:
+    if your app serves user-uploaded files as static content from the same origin, an attacker can upload a <code>.js</code> file
+    and load it as a script &mdash; bypassing nonce-based CSP entirely.</text>
+</div>
+
+@* ---- Section 1: Insecure Upload ---- *@
+<div class="card mb-4 border-danger">
+    <div class="card-header bg-danger text-white">
+        <h3 class="mb-0">Insecure Upload (files served from <code class="text-white">'self'</code>)</h3>
+    </div>
+    <div class="card-body">
+        <div class="alert alert-danger">
+            <strong>Vulnerable Pattern:</strong> Files are saved to <code>wwwroot/uploads/</code> and served as static files
+            by <code>UseStaticFiles()</code>. Since they come from the same origin, CSP treats them as <code>'self'</code>
+            and allows <code>&lt;script src="/uploads/evil.js"&gt;</code> to execute.
+        </div>
+
+        <h5>Upload a file (any type accepted &mdash; including .js)</h5>
+        <InputFile OnChange="OnInsecureFileSelected" class="form-control mb-3" />
+        @if (_insecureUploading)
+        {
+            <div class="spinner-border spinner-border-sm text-danger me-2" role="status"></div>
+            <span>Uploading...</span>
+        }
+
+        @if (_insecureFiles.Count > 0)
+        {
+            <h5 class="mt-3">Uploaded Files (insecure)</h5>
+            <table class="table table-sm table-bordered">
+                <thead>
+                    <tr>
+                        <th>File</th>
+                        <th>URL (static file from 'self')</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var file in _insecureFiles)
+                    {
+                        <tr>
+                            <td>@file.Name</td>
+                            <td><a href="@file.Url" target="_blank"><code>@file.Url</code></a></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+</div>
+
+@* ---- Section 2: Secure Upload ---- *@
+<div class="card mb-4 border-success">
+    <div class="card-header bg-success text-white">
+        <h3 class="mb-0">Secure Upload (files served via API)</h3>
+    </div>
+    <div class="card-body">
+        <div class="alert alert-success">
+            <strong>Safe Pattern:</strong> Files are validated (only docx, pdf, images allowed), renamed with a GUID,
+            stored <em>outside</em> wwwroot, and served via an API endpoint with
+            <code>Content-Type: application/octet-stream</code> and <code>Content-Disposition: attachment</code>.
+            Even if an attacker could somehow upload a .js file, it would never be executable.
+        </div>
+
+        <h5>Upload a file (.docx, .pdf, .png, .jpg, .gif only)</h5>
+        <InputFile OnChange="OnSecureFileSelected" class="form-control mb-3" />
+        @if (_secureUploading)
+        {
+            <div class="spinner-border spinner-border-sm text-success me-2" role="status"></div>
+            <span>Uploading...</span>
+        }
+
+        @if (!string.IsNullOrEmpty(_secureUploadError))
+        {
+            <div class="alert alert-warning mt-2">@_secureUploadError</div>
+        }
+
+        @if (_secureFiles.Count > 0)
+        {
+            <h5 class="mt-3">Uploaded Files (secure)</h5>
+            <table class="table table-sm table-bordered">
+                <thead>
+                    <tr>
+                        <th>File</th>
+                        <th>Download URL (API endpoint)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var file in _secureFiles)
+                    {
+                        <tr>
+                            <td>@file.Name</td>
+                            <td><a href="@file.Url" target="_blank"><code>@file.Url</code></a></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+</div>
+
+@* ---- Section 3: Attack Simulation ---- *@
+<div class="card mb-4 border-dark">
+    <div class="card-header bg-dark text-white">
+        <h3 class="mb-0">Attack Simulation: CSP Bypass via <code class="text-white">'self'</code> + Uploaded File</h3>
+    </div>
+    <div class="card-body">
+        <p>
+            This simulation demonstrates the attack:
+        </p>
+        <ol>
+            <li>A crafted <code>.js</code> file is uploaded to the <strong>insecure</strong> endpoint (<code>/api/upload/insecure</code>)</li>
+            <li>A <code>&lt;script src="/uploads/attack-demo.js"&gt;</code> tag is dynamically created</li>
+            <li>Since the script is from <code>'self'</code>, CSP allows it <strong>even in Secure nonce mode</strong></li>
+            <li>The script executes and modifies the page &mdash; proving the bypass</li>
+        </ol>
+
+        <button class="btn btn-danger btn-lg" @onclick="SimulateAttack" disabled="@_attackRunning">
+            @if (_attackRunning)
+            {
+                <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+            }
+            Simulate CSP Bypass Attack
+        </button>
+
+        <div class="mt-3 p-3 border rounded" style="min-height: 60px;">
+            <strong>Attack Result:</strong>
+            <p id="attack-result" class="mb-0 mt-1" style="font-size: 1.1rem;">
+                Waiting for attack simulation...
+            </p>
+        </div>
+
+        @if (_attackResult.HasValue)
+        {
+            <div class="alert @(_attackResult.Value ? "alert-danger" : "alert-success") mt-3">
+                @if (_attackResult.Value)
+                {
+                    <h5>CSP BYPASSED</h5>
+                    <p class="mb-0">
+                        The uploaded <code>.js</code> file executed successfully despite nonce-based CSP.
+                        This proves that <code>'self'</code> in <code>script-src</code> combined with user-uploaded files
+                        from the same origin defeats CSP protection entirely.
+                    </p>
+                }
+                else
+                {
+                    <h5>Attack Blocked</h5>
+                    <p class="mb-0">The uploaded script did not execute. @_attackMessage</p>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@* ---- Summary Table ---- *@
+<div class="card mb-4">
+    <div class="card-header">
+        <h3 class="mb-0">Summary: When Does the Attack Succeed?</h3>
+    </div>
+    <div class="card-body">
+        <table class="table table-bordered">
+            <thead>
+                <tr>
+                    <th>CSP Mode</th>
+                    <th>Upload Path</th>
+                    <th>Script Executes?</th>
+                    <th>Why</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr class="table-danger">
+                    <td><strong>Secure</strong> (nonce)</td>
+                    <td>Insecure (<code>wwwroot/uploads/</code>)</td>
+                    <td><strong>YES</strong></td>
+                    <td>Script is from <code>'self'</code> &mdash; CSP allows it</td>
+                </tr>
+                <tr class="table-danger">
+                    <td>Insecure</td>
+                    <td>Insecure (<code>wwwroot/uploads/</code>)</td>
+                    <td><strong>YES</strong></td>
+                    <td><code>unsafe-inline</code> allows everything anyway</td>
+                </tr>
+                <tr class="table-success">
+                    <td><strong>Secure</strong> (nonce)</td>
+                    <td>Secure (<code>Data/uploads/</code>)</td>
+                    <td><strong>NO</strong></td>
+                    <td>File type rejected; served as attachment, not executable</td>
+                </tr>
+            </tbody>
+        </table>
+        <p class="text-muted mt-2">
+            <strong>Key insight:</strong> Even with perfect nonce-based CSP, serving user uploads from <code>'self'</code>
+            defeats the protection. Always store user uploads outside the web root and serve them via an API
+            with proper <code>Content-Type</code> and <code>Content-Disposition</code> headers.
+        </p>
+    </div>
+</div>
+
+@code {
+    private string _cspMode = "";
+    private bool _isSecure;
+
+    // Insecure upload state
+    private bool _insecureUploading;
+    private List<UploadedFile> _insecureFiles = new();
+
+    // Secure upload state
+    private bool _secureUploading;
+    private string _secureUploadError = "";
+    private List<UploadedFile> _secureFiles = new();
+
+    // Attack simulation state
+    private bool _attackRunning;
+    private bool? _attackResult;
+    private string _attackMessage = "";
+
+    protected override void OnInitialized()
+    {
+        _cspMode = Configuration.GetValue<string>("CspMode") ?? "Secure";
+        _isSecure = _cspMode.Equals("Secure", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task OnInsecureFileSelected(InputFileChangeEventArgs e)
+    {
+        _insecureUploading = true;
+        StateHasChanged();
+
+        try
+        {
+            var file = e.File;
+            using var content = new System.IO.MemoryStream();
+            await file.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024).CopyToAsync(content);
+            content.Position = 0;
+
+            // Upload via JS fetch to avoid antiforgery issues with Blazor forms
+            var base64 = Convert.ToBase64String(content.ToArray());
+            var result = await JSRuntime.InvokeAsync<UploadResponse>(
+                "uploadFileViaFetch",
+                "/api/upload/insecure",
+                file.Name,
+                file.ContentType,
+                base64);
+
+            if (result?.Url != null)
+            {
+                _insecureFiles.Add(new UploadedFile { Name = result.Name ?? file.Name, Url = result.Url });
+            }
+        }
+        catch (Exception ex)
+        {
+            await JSRuntime.InvokeVoidAsync("console.error", $"Insecure upload failed: {ex.Message}");
+        }
+        finally
+        {
+            _insecureUploading = false;
+        }
+    }
+
+    private async Task OnSecureFileSelected(InputFileChangeEventArgs e)
+    {
+        _secureUploading = true;
+        _secureUploadError = "";
+        StateHasChanged();
+
+        try
+        {
+            var file = e.File;
+            using var content = new System.IO.MemoryStream();
+            await file.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024).CopyToAsync(content);
+            content.Position = 0;
+
+            var base64 = Convert.ToBase64String(content.ToArray());
+            var result = await JSRuntime.InvokeAsync<UploadResponse>(
+                "uploadFileViaFetch",
+                "/api/upload/secure",
+                file.Name,
+                file.ContentType,
+                base64);
+
+            if (result?.Error != null)
+            {
+                _secureUploadError = result.Error;
+            }
+            else if (result?.Url != null)
+            {
+                _secureFiles.Add(new UploadedFile { Name = result.Name ?? file.Name, Url = result.Url });
+            }
+        }
+        catch (Exception ex)
+        {
+            _secureUploadError = $"Upload failed: {ex.Message}";
+        }
+        finally
+        {
+            _secureUploading = false;
+        }
+    }
+
+    private async Task SimulateAttack()
+    {
+        _attackRunning = true;
+        _attackResult = null;
+        _attackMessage = "";
+        StateHasChanged();
+
+        try
+        {
+            var success = await JSRuntime.InvokeAsync<bool>(
+                "simulateUploadAttack",
+                "/api/upload/insecure",
+                "/uploads/attack-demo.js");
+
+            _attackResult = success;
+            _attackMessage = success
+                ? "The uploaded .js file executed from 'self' — CSP nonce bypassed."
+                : "The script did not execute (unexpected).";
+        }
+        catch (Exception ex)
+        {
+            _attackResult = false;
+            _attackMessage = $"Attack simulation error: {ex.Message}";
+        }
+        finally
+        {
+            _attackRunning = false;
+        }
+    }
+
+    private record UploadedFile
+    {
+        public string Name { get; set; } = "";
+        public string Url { get; set; } = "";
+    }
+
+    private record UploadResponse
+    {
+        public string? Url { get; set; }
+        public string? Name { get; set; }
+        public string? Id { get; set; }
+        public string? Error { get; set; }
+    }
+}

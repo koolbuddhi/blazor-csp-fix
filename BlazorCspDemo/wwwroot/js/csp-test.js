@@ -65,6 +65,58 @@ function checkNoncedScript() {
 }
 
 /**
+ * Uploads a file via fetch — used by UploadDemo.razor to POST files
+ * to the upload API endpoints without antiforgery token issues.
+ */
+function uploadFileViaFetch(url, fileName, contentType, base64Data) {
+    var byteCharacters = atob(base64Data);
+    var byteNumbers = new Array(byteCharacters.length);
+    for (var i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    var byteArray = new Uint8Array(byteNumbers);
+    var blob = new Blob([byteArray], { type: contentType });
+
+    var formData = new FormData();
+    formData.append('file', blob, fileName);
+
+    return fetch(url, { method: 'POST', body: formData })
+        .then(function (resp) { return resp.json(); });
+}
+
+/**
+ * Simulates a CSP bypass attack using 'self' + user-uploaded files.
+ * Uploads a crafted .js file to the insecure endpoint, then loads it
+ * as a <script> tag. Since the file is served from 'self', CSP allows it
+ * even in Secure (nonce-based) mode.
+ */
+function simulateUploadAttack(uploadUrl, scriptPath) {
+    var payload = 'window.__cspBypassProof = true; '
+        + 'document.getElementById("attack-result").textContent = '
+        + '"SCRIPT EXECUTED \\u2014 CSP bypassed via self + uploaded file";';
+
+    var blob = new Blob([payload], { type: 'application/javascript' });
+    var formData = new FormData();
+    formData.append('file', blob, 'attack-demo.js');
+
+    return fetch(uploadUrl, { method: 'POST', body: formData })
+        .then(function (resp) { return resp.json(); })
+        .then(function (data) {
+            // Load the uploaded file as a script
+            var script = document.createElement('script');
+            script.src = data.url; // e.g., /uploads/attack-demo.js
+            document.body.appendChild(script);
+
+            // Check if it executed after a short delay
+            return new Promise(function (resolve) {
+                setTimeout(function () {
+                    resolve(window.__cspBypassProof === true);
+                }, 500);
+            });
+        });
+}
+
+/**
  * NavMenu mobile toggle — replaces the inline onclick handler
  * that violates CSP. Attached via addEventListener from external JS.
  */

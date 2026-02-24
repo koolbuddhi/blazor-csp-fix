@@ -282,3 +282,122 @@ Alt: `CspMode=Insecure dotnet run` via env var.
 - [Radzen Forum: CSP Discussion](https://forum.radzen.com/t/content-security-policy/6614) — community workarounds
 - [Microsoft Blazor CSP Docs](https://learn.microsoft.com/en-us/aspnet/core/blazor/security/content-security-policy)
 - [Radzen Get Started](https://blazor.radzen.com/get-started) — setup instructions
+
+---
+
+## Automated Testing Plan
+
+### Context
+
+The demo project currently relies on manual browser testing (CSP Demo page, Radzen Demo page, DevTools inspection). Adding automated tests provides:
+- Regression safety when modifying CSP middleware
+- CI/CD integration for security header verification
+- Documentation-as-code of expected CSP behavior in each mode
+
+### Test Project Structure
+
+New project: `BlazorCspDemo.Tests/` (xUnit + WebApplicationFactory + Playwright)
+
+```
+BlazorCspDemo.Tests/
+├── BlazorCspDemo.Tests.csproj
+├── Helpers/
+│   └── CspTestHelpers.cs          # CspWebApplicationFactory + CspHeaderParser
+├── Integration/                    # Tier 1: HTTP header tests (fast, no browser)
+│   ├── CspSecureHeaderTests.cs     # 6 tests: nonce present, no unsafe-*, base64 validation
+│   ├── CspInsecureHeaderTests.cs   # 4 tests: unsafe-* present, no nonce in header
+│   ├── CspNonceRotationTests.cs    # 2 tests: unique nonce per request
+│   ├── SecurityHeaderTests.cs      # 5 tests: X-Frame-Options, X-Content-Type, etc.
+│   ├── StaticFileHeaderTests.cs    # 4 tests: static files skip CSP middleware
+│   ├── CspDefaultModeTests.cs      # 1 test: missing config defaults to Secure
+│   └── CspDevelopmentModeTests.cs  # 3 tests: dev vs prod CSP differences
+├── Playwright/                     # Tier 2: Browser tests (real Chromium)
+│   ├── PlaywrightFixture.cs        # Kestrel server + Playwright browser bootstrap
+│   ├── CspSecureBrowserTests.cs    # 5 tests: eval blocked, dynamic script blocked, nonce works
+│   ├── CspInsecureBrowserTests.cs  # 3 tests: eval succeeds, Blazor loads, JS interop works
+│   └── BlazorSignalRTests.cs       # SignalR connection tests in both modes
+└── Scripts/
+    └── security-scan.sh            # Tier 3: curl-based + optional OWASP ZAP
+```
+
+### Tier 1: Integration Tests (xUnit + WebApplicationFactory)
+
+**Dependencies:** `Microsoft.AspNetCore.Mvc.Testing`, `xunit`, `FluentAssertions`
+
+**Prerequisite change:** Add `public partial class Program { }` to bottom of `BlazorCspDemo/Program.cs` (standard pattern for `WebApplicationFactory<Program>` access).
+
+**Key shared infrastructure (`CspTestHelpers.cs`):**
+- `CspWebApplicationFactory` — subclass of `WebApplicationFactory<Program>` with configurable `CspMode` and `Environment` properties, using `IHostBuilder.ConfigureAppConfiguration` to override settings
+- `CspHeaderParser` — static helpers: `GetDirective(csp, "script-src")` and `ExtractNonce(directiveValue)`
+
+**Test classes and what they verify:**
+
+| Class | Tests | What It Validates |
+|-------|-------|-------------------|
+| `CspSecureHeaderTests` | 6 | Nonce in script-src and style-src, no unsafe-inline, no unsafe-eval, nonce is 32 bytes base64, same nonce in both directives |
+| `CspInsecureHeaderTests` | 4 | unsafe-inline and unsafe-eval present, no nonce in CSP header, unsafe-inline in style-src |
+| `CspNonceRotationTests` | 2 | Two requests get different nonces, 10 requests all unique |
+| `SecurityHeaderTests` | 5 | X-Content-Type-Options: nosniff, X-Frame-Options: DENY, Referrer-Policy, Permissions-Policy, present in both modes |
+| `StaticFileHeaderTests` | 4 | `/app.css`, `/favicon.png` do NOT get CSP or security headers (UseStaticFiles short-circuits before UseCsp) |
+| `CspDefaultModeTests` | 1 | When CspMode config key is missing entirely, defaults to Secure (fail-safe) |
+| `CspDevelopmentModeTests` | 3 | Dev mode: script-src has both nonce AND unsafe-inline; style-src has unsafe-inline without nonce; Production mode: no unsafe-inline |
+
+### Tier 2: Playwright Browser Tests
+
+**Dependencies:** `Microsoft.Playwright`
+
+**Why not WebApplicationFactory:** Blazor Server needs real WebSocket for SignalR. `WebApplicationFactory`'s in-memory `TestServer` doesn't support WebSocket upgrades. The `PlaywrightFixture` starts a real Kestrel server on `http://127.0.0.1:0` (OS-assigned port).
+
+**Test classes:**
+
+| Class | Tests | What It Validates |
+|-------|-------|-------------------|
+| `CspSecureBrowserTests` | 5 | eval() blocked, dynamic script blocked, nonced inline script works, Blazor+SignalR loads, Counter JS interop works |
+| `CspInsecureBrowserTests` | 3 | eval() succeeds, Blazor+SignalR loads, Counter JS interop works |
+
+### Tier 3: Security Scan Script
+
+**`Scripts/security-scan.sh`** — standalone bash script that:
+1. Builds and starts the app in Secure mode on a fixed port
+2. Runs 10+ curl-based header checks (CSP, nonce, security headers, nonce rotation, static files)
+3. Stops and restarts in Insecure mode, runs 2 more checks
+4. With `--zap` flag: runs OWASP ZAP baseline scan via Docker, outputs `zap-report.html`
+5. Produces a `security-scan-report.txt` with PASS/FAIL counts
+
+### Files to Create/Modify
+
+| File | Action |
+|------|--------|
+| `BlazorCspDemo.Tests/BlazorCspDemo.Tests.csproj` | Create — xUnit + Mvc.Testing + Playwright + FluentAssertions |
+| `BlazorCspDemo.Tests/Helpers/CspTestHelpers.cs` | Create — shared factory + parser |
+| `BlazorCspDemo.Tests/Integration/*.cs` | Create — 7 test classes (25 tests) |
+| `BlazorCspDemo.Tests/Playwright/*.cs` | Create — fixture + 2 test classes (8 tests) |
+| `BlazorCspDemo.Tests/Scripts/security-scan.sh` | Create — shell script |
+| `BlazorCspDemo/Program.cs` | Modify — add `public partial class Program { }` |
+| `blazor-csp-fix.sln` | Modify — `dotnet sln add` the test project |
+
+### How to Run
+
+```bash
+# All tests
+dotnet test
+
+# Tier 1 only (fast, no browser)
+dotnet test --filter "FullyQualifiedName~Integration"
+
+# Tier 2 only (requires Playwright browsers installed)
+dotnet test --filter "FullyQualifiedName~Playwright"
+
+# Tier 3
+./BlazorCspDemo.Tests/Scripts/security-scan.sh         # curl checks
+./BlazorCspDemo.Tests/Scripts/security-scan.sh --zap    # + OWASP ZAP (needs Docker)
+```
+
+### Verification
+
+After implementation:
+1. `dotnet test` passes all 33 tests
+2. `security-scan.sh` reports 0 failures in both modes
+3. Tier 1 tests run in < 5 seconds (no browser overhead)
+4. Tier 2 tests run headless Chromium
+5. Commit and push — CI can run Tier 1 immediately, Tier 2 with Playwright setup
