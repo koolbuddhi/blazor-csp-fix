@@ -1,0 +1,286 @@
+@page "/csp-demo"
+@rendermode InteractiveServer
+@using BlazorCspDemo.Services
+@inject BlazorNonceService NonceService
+@inject IConfiguration Configuration
+@inject IJSRuntime JSRuntime
+
+<PageTitle>CSP Demo</PageTitle>
+
+<h1>Content Security Policy Demo</h1>
+
+@* ---- Mode Indicator ---- *@
+<div class="card mb-4">
+    <div class="card-header">
+        <h3>Current CSP Mode</h3>
+    </div>
+    <div class="card-body">
+        <span class="badge @(_isSecure ? "bg-success" : "bg-danger")"
+              style="font-size: 1.2rem; padding: 0.5rem 1rem;">
+            @(_isSecure ? "SECURE (Nonce-based)" : "INSECURE (unsafe-inline / unsafe-eval)")
+        </span>
+        <p class="mt-2 text-muted">
+            Configured via <code>appsettings.json</code> key:
+            <code>"CspMode": "@_cspMode"</code>
+        </p>
+    </div>
+</div>
+
+@* ---- CSP Header Display ---- *@
+<div class="card mb-4">
+    <div class="card-header">
+        <h3>CSP Header Value</h3>
+    </div>
+    <div class="card-body">
+        <pre style="white-space: pre-wrap; word-break: break-all; background: #f5f5f5; padding: 1rem; border-radius: 4px;">@_cspHeaderDisplay</pre>
+        @if (_isSecure)
+        {
+            <p class="text-info">
+                The nonce value changes on every page load. Refresh to verify.
+            </p>
+        }
+    </div>
+</div>
+
+@* ---- Feature Status Grid ---- *@
+<div class="card mb-4">
+    <div class="card-header">
+        <h3>CSP Feature Status</h3>
+    </div>
+    <div class="card-body">
+        <table class="table table-bordered">
+            <thead>
+                <tr>
+                    <th>Feature</th>
+                    <th>Status</th>
+                    <th>Explanation</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>unsafe-inline</code> in script-src</td>
+                    <td><span class="badge @(!_isSecure ? "bg-danger" : "bg-secondary")">@(!_isSecure ? "PRESENT" : "Removed")</span></td>
+                    <td>@(_isSecure ? "REMOVED -- scripts must use nonce" : "PRESENT -- any inline script executes (vulnerable)")</td>
+                </tr>
+                <tr>
+                    <td><code>unsafe-eval</code> in script-src</td>
+                    <td><span class="badge @(!_isSecure ? "bg-danger" : "bg-secondary")">@(!_isSecure ? "PRESENT" : "Removed")</span></td>
+                    <td>@(_isSecure ? "REMOVED -- eval() is blocked" : "PRESENT -- eval() is allowed (vulnerable)")</td>
+                </tr>
+                <tr>
+                    <td>Nonce-based script-src</td>
+                    <td><span class="badge @(_isSecure ? "bg-success" : "bg-secondary")">@(_isSecure ? "Active" : "Inactive")</span></td>
+                    <td>@(_isSecure ? "ACTIVE -- only nonced scripts execute" : "NOT USED -- nonce generated but not enforced")</td>
+                </tr>
+                <tr>
+                    <td>Additional Security Headers</td>
+                    <td><span class="badge bg-success">Active</span></td>
+                    <td>X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy (always active)</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@* ---- Live Tests ---- *@
+<div class="card mb-4">
+    <div class="card-header">
+        <h3>Live CSP Tests</h3>
+    </div>
+    <div class="card-body">
+
+        @* Test 1: Inline script with nonce *@
+        <h5>Test 1: Inline Script (with nonce in App.razor)</h5>
+        <p>Checks if the inline <code>&lt;script nonce="..."&gt;</code> in App.razor executed.</p>
+        <button class="btn btn-primary mb-3" @onclick="TestNoncedInlineScript">
+            Run Nonced Inline Script Test
+        </button>
+        @if (_noncedScriptResult.HasValue)
+        {
+            <div class="alert @(_noncedScriptResult.Value ? "alert-success" : "alert-danger")">
+                @_noncedScriptMessage
+            </div>
+        }
+
+        <hr />
+
+        @* Test 2: eval() attempt *@
+        <h5>Test 2: <code>eval()</code> Attempt</h5>
+        <p>Calls <code>tryEval()</code> which runs <code>eval('2 + 2')</code>.
+           In Secure mode, this should be <strong>blocked</strong> by CSP.</p>
+        <button class="btn btn-warning mb-3" @onclick="TestEval">
+            Try eval()
+        </button>
+        @if (_evalResult.HasValue)
+        {
+            <div class="alert @(_evalResult.Value ? "alert-danger" : "alert-success")">
+                @_evalMessage
+            </div>
+        }
+
+        <hr />
+
+        @* Test 3: Dynamic script injection *@
+        <h5>Test 3: Dynamic Script Injection</h5>
+        <p>Attempts to inject a <code>&lt;script&gt;</code> element into the DOM at runtime.
+           In Secure mode, the injected script lacks a valid nonce and should be <strong>blocked</strong>.</p>
+        <button class="btn btn-warning mb-3" @onclick="TestDynamicScript">
+            Try Dynamic Script Injection
+        </button>
+        <p id="dynamic-script-result">Waiting for test...</p>
+        @if (_dynamicResult.HasValue)
+        {
+            <div class="alert @(_dynamicResult.Value ? "alert-danger" : "alert-success")">
+                @_dynamicMessage
+            </div>
+        }
+
+        <hr />
+
+        @* Test 4: External JS function (always works) *@
+        <h5>Test 4: External JS Function (always allowed)</h5>
+        <p>Calls <code>changeTextColor()</code> from <code>js/csp-test.js</code>.
+           This should work in <strong>both</strong> modes because external scripts from 'self' are always allowed.</p>
+        <p id="color-change-target" style="font-weight: bold; font-size: 1.2rem;">This text will change color.</p>
+        <button class="btn btn-success mb-3" @onclick="TestExternalJs">
+            Change Color via External JS
+        </button>
+        @if (_externalJsResult.HasValue)
+        {
+            <div class="alert @(_externalJsResult.Value ? "alert-success" : "alert-danger")">
+                @_externalJsMessage
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private string _cspMode = "";
+    private bool _isSecure;
+    private string _cspHeaderDisplay = "Loading...";
+
+    private bool? _noncedScriptResult;
+    private string _noncedScriptMessage = "";
+    private bool? _evalResult;
+    private string _evalMessage = "";
+    private bool? _dynamicResult;
+    private string _dynamicMessage = "";
+    private bool? _externalJsResult;
+    private string _externalJsMessage = "";
+
+    protected override void OnInitialized()
+    {
+        _cspMode = Configuration.GetValue<string>("CspMode") ?? "Secure";
+        _isSecure = _cspMode.Equals("Secure", StringComparison.OrdinalIgnoreCase);
+
+        if (_isSecure)
+        {
+            var nonce = NonceService.Nonce;
+            var nonceDisplay = string.IsNullOrEmpty(nonce) ? "<nonce>" : nonce[..8] + "...";
+            _cspHeaderDisplay = string.Join(";\n",
+                "default-src 'self'",
+                $"script-src 'self' 'nonce-{nonceDisplay}'",
+                $"style-src 'self' 'nonce-{nonceDisplay}'",
+                "img-src 'self' data:",
+                "font-src 'self'",
+                "connect-src 'self' wss: ws:",
+                "frame-ancestors 'none'",
+                "base-uri 'self'",
+                "form-action 'self'"
+            );
+        }
+        else
+        {
+            _cspHeaderDisplay = string.Join(";\n",
+                "default-src 'self'",
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+                "style-src 'self' 'unsafe-inline'",
+                "img-src 'self' data:",
+                "font-src 'self'",
+                "connect-src 'self' wss: ws:",
+                "frame-ancestors 'none'",
+                "base-uri 'self'",
+                "form-action 'self'"
+            );
+        }
+    }
+
+    private async Task TestNoncedInlineScript()
+    {
+        try
+        {
+            var ran = await JSRuntime.InvokeAsync<bool>("checkNoncedScript");
+            _noncedScriptResult = ran;
+            _noncedScriptMessage = ran
+                ? "PASS: Nonced inline script in App.razor executed successfully."
+                : "FAIL: Nonced inline script did not execute.";
+        }
+        catch (Exception ex)
+        {
+            _noncedScriptResult = false;
+            _noncedScriptMessage = $"FAIL: {ex.Message}";
+        }
+    }
+
+    private async Task TestEval()
+    {
+        try
+        {
+            var result = await JSRuntime.InvokeAsync<EvalResult>("tryEval");
+            _evalResult = result.Success;
+            _evalMessage = result.Success
+                ? "eval() SUCCEEDED -- unsafe-eval is active (insecure)."
+                : $"eval() BLOCKED by CSP (secure). {result.Message}";
+        }
+        catch (Exception ex)
+        {
+            _evalResult = false;
+            _evalMessage = $"eval() BLOCKED by CSP (secure). Error: {ex.Message}";
+        }
+    }
+
+    private async Task TestDynamicScript()
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("tryDynamicScript");
+            await Task.Delay(300);
+            var text = await JSRuntime.InvokeAsync<string>("getElementText", "dynamic-script-result");
+            if (text.Contains("Dynamic script executed"))
+            {
+                _dynamicResult = true;
+                _dynamicMessage = "Dynamic script EXECUTED -- CSP did not block it (insecure).";
+            }
+            else
+            {
+                _dynamicResult = false;
+                _dynamicMessage = "Dynamic script was BLOCKED by CSP (secure).";
+            }
+        }
+        catch
+        {
+            _dynamicResult = false;
+            _dynamicMessage = "Dynamic script test blocked by CSP (secure).";
+        }
+    }
+
+    private async Task TestExternalJs()
+    {
+        try
+        {
+            var result = await JSRuntime.InvokeAsync<bool>(
+                "changeTextColor", "color-change-target", "#0d6efd");
+            _externalJsResult = result;
+            _externalJsMessage = result
+                ? "PASS: External JS function executed. This always works."
+                : "FAIL: External JS function returned false.";
+        }
+        catch (Exception ex)
+        {
+            _externalJsResult = false;
+            _externalJsMessage = $"FAIL: {ex.Message}";
+        }
+    }
+
+    private record EvalResult(bool Success, int? Result, string Message);
+}

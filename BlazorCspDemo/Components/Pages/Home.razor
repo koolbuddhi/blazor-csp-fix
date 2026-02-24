@@ -1,0 +1,65 @@
+@page "/"
+@rendermode InteractiveServer
+@inject IConfiguration Configuration
+
+<PageTitle>Home - Blazor CSP Demo</PageTitle>
+
+<h1>Blazor Server CSP Demo</h1>
+
+<p class="lead">
+    This application demonstrates Content Security Policy (CSP) in a Blazor Server app
+    with two switchable modes:
+</p>
+
+<div class="row mt-4">
+    <div class="col-md-6 mb-3">
+        <div class="card border-danger h-100">
+            <div class="card-header bg-danger text-white">
+                <h5 class="mb-0">Mode 1: Insecure</h5>
+            </div>
+            <div class="card-body">
+                <p>Uses <code>unsafe-inline</code> and <code>unsafe-eval</code> in CSP headers.</p>
+                <p>This is the <strong>problem state</strong> flagged by security reviews.</p>
+                <code>"CspMode": "Insecure"</code>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 mb-3">
+        <div class="card border-success h-100">
+            <div class="card-header bg-success text-white">
+                <h5 class="mb-0">Mode 2: Secure</h5>
+            </div>
+            <div class="card-body">
+                <p>Uses per-request cryptographic <strong>nonces</strong> instead of unsafe directives.</p>
+                <p>This is the <strong>fix</strong>.</p>
+                <code>"CspMode": "Secure"</code>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="alert @(_isSecure ? "alert-success" : "alert-danger") mt-3">
+    <strong>Current mode:</strong> @(_isSecure ? "Secure (Nonce-based)" : "Insecure (unsafe-inline / unsafe-eval)")
+</div>
+
+<div class="mt-4">
+    <h4>Try it out:</h4>
+    <ul>
+        <li>Visit the <a href="/csp-demo"><strong>CSP Demo</strong></a> page to see the current mode,
+            inspect the CSP header, and run live tests.</li>
+        <li>Visit the <a href="/counter"><strong>Counter</strong></a> page to test JS Interop under CSP.</li>
+        <li>Visit the <a href="/radzen-demo"><strong>Radzen Demo</strong></a> page to test third-party component CSP compatibility.</li>
+        <li>Toggle between modes by changing <code>"CspMode"</code> in
+            <code>appsettings.json</code> and restarting.</li>
+    </ul>
+</div>
+
+@code {
+    private bool _isSecure;
+
+    protected override void OnInitialized()
+    {
+        var mode = Configuration.GetValue<string>("CspMode") ?? "Secure";
+        _isSecure = mode.Equals("Secure", StringComparison.OrdinalIgnoreCase);
+    }
+}

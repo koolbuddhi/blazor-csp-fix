@@ -1,0 +1,245 @@
+@page "/radzen-demo"
+@rendermode InteractiveServer
+@inject IConfiguration Configuration
+
+<PageTitle>Radzen CSP Demo</PageTitle>
+
+<h1>Radzen Component CSP Compatibility Test</h1>
+
+<div class="alert @(_isSecure ? "alert-warning" : "alert-info") mb-4">
+    <strong>Current CSP Mode:</strong> @(_isSecure ? "Secure (Nonce-based)" : "Insecure (unsafe-inline / unsafe-eval)")
+    <br />
+    @if (_isSecure)
+    {
+        <text>Radzen officially requires <code>unsafe-inline</code> and <code>unsafe-eval</code>.
+        Some components below may not work correctly. Check the browser console (F12) for CSP violation errors.</text>
+    }
+    else
+    {
+        <text>All Radzen components should work in this mode since <code>unsafe-inline</code> is allowed.</text>
+    }
+</div>
+
+@* ---- Radzen's Required CSP ---- *@
+<div class="card mb-4">
+    <div class="card-header">
+        <h3>Radzen's Official CSP Requirements</h3>
+    </div>
+    <div class="card-body">
+        <pre style="background: #f5f5f5; padding: 1rem; border-radius: 4px;">script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' 'unsafe-inline'
+style-src 'self' 'unsafe-inline'</pre>
+        <p class="text-muted mt-2">
+            This effectively disables CSP protection for scripts and styles.
+            See <a href="https://github.com/radzenhq/radzen-blazor/issues/526" target="_blank">issue #526</a> for context.
+        </p>
+    </div>
+</div>
+
+@* ---- Component Tests ---- *@
+<div class="card mb-4">
+    <div class="card-header">
+        <h3>Component Tests</h3>
+    </div>
+    <div class="card-body">
+
+        @* Test 1: RadzenButton *@
+        <h5 class="mt-3">1. RadzenButton</h5>
+        <p class="text-muted">Basic control — should work in both modes.</p>
+        <RadzenButton Text="Click Me" Click="@(() => _buttonClicked = true)"
+                      ButtonStyle="ButtonStyle.Primary" />
+        @if (_buttonClicked)
+        {
+            <span class="ms-2 text-success">Button clicked!</span>
+        }
+
+        <hr />
+
+        @* Test 2: RadzenTextBox *@
+        <h5>2. RadzenTextBox</h5>
+        <p class="text-muted">Form input — should work in both modes.</p>
+        <RadzenTextBox @bind-Value="_textBoxValue" Placeholder="Type something..." />
+        @if (!string.IsNullOrEmpty(_textBoxValue))
+        {
+            <span class="ms-2">Value: @_textBoxValue</span>
+        }
+
+        <hr />
+
+        @* Test 3: RadzenDropDown *@
+        <h5>3. RadzenDropDown</h5>
+        <p class="text-muted">Known to generate inline scripts (<a href="https://github.com/radzenhq/radzen-blazor/issues/526" target="_blank">issue #526</a>). May trigger CSP violation in Secure mode.</p>
+        <RadzenDropDown @bind-Value="_selectedItem" Data="@_dropdownItems"
+                        TextProperty="Name" ValueProperty="Id"
+                        Placeholder="Select an item..." Style="width: 300px;" />
+        @if (!string.IsNullOrEmpty(_selectedItem))
+        {
+            <span class="ms-2">Selected: @_selectedItem</span>
+        }
+
+        <hr />
+
+        @* Test 4: RadzenDataGrid *@
+        <h5>4. RadzenDataGrid</h5>
+        <p class="text-muted">Complex rendering — inline styles likely for column sizing.</p>
+        <RadzenDataGrid Data="@_gridData" TItem="SampleItem" Style="margin-bottom: 1rem;">
+            <Columns>
+                <RadzenDataGridColumn TItem="SampleItem" Property="Id" Title="ID" Width="80px" />
+                <RadzenDataGridColumn TItem="SampleItem" Property="Name" Title="Name" />
+                <RadzenDataGridColumn TItem="SampleItem" Property="Description" Title="Description" />
+            </Columns>
+        </RadzenDataGrid>
+
+        <hr />
+
+        @* Test 5: RadzenAccordion *@
+        <h5>5. RadzenAccordion</h5>
+        <p class="text-muted">Uses <code>javascript:void(0)</code> + inline onclick. Expected to trigger CSP violation in Secure mode.</p>
+        <RadzenAccordion>
+            <Items>
+                <RadzenAccordionItem Text="Accordion Item 1" Selected="true">
+                    Content of accordion item 1. If you can see this, the accordion rendered.
+                </RadzenAccordionItem>
+                <RadzenAccordionItem Text="Accordion Item 2">
+                    Content of accordion item 2.
+                </RadzenAccordionItem>
+            </Items>
+        </RadzenAccordion>
+
+        <hr />
+
+        @* Test 6: RadzenDatePicker *@
+        <h5>6. RadzenDatePicker</h5>
+        <p class="text-muted">Popup behavior — JavaScript navigation may be affected.</p>
+        <RadzenDatePicker @bind-Value="_selectedDate" DateFormat="yyyy-MM-dd" Style="width: 300px;" />
+        @if (_selectedDate.HasValue)
+        {
+            <span class="ms-2">Selected: @_selectedDate.Value.ToString("yyyy-MM-dd")</span>
+        }
+
+        <hr />
+
+        @* Test 7: RadzenChart *@
+        <h5>7. RadzenChart</h5>
+        <p class="text-muted">SVG rendering — inline styles for sizing.</p>
+        <RadzenChart Style="height: 200px;">
+            <RadzenColumnSeries Data="@_chartData" CategoryProperty="Label" ValueProperty="Value" />
+            <RadzenCategoryAxis />
+            <RadzenValueAxis />
+        </RadzenChart>
+
+        <hr />
+
+        @* Test 8: RadzenNotification *@
+        <h5>8. RadzenNotification</h5>
+        <p class="text-muted">Dynamic content — inline styles for positioning.</p>
+        <RadzenButton Text="Show Notification" Click="@ShowNotification"
+                      ButtonStyle="ButtonStyle.Info" />
+
+        <hr />
+
+        @* Test 9: RadzenProgressBar *@
+        <h5>9. RadzenProgressBar</h5>
+        <p class="text-muted">Animated rendering — inline styles for width.</p>
+        <RadzenProgressBar Value="65" Style="height: 24px;" />
+
+        <hr />
+
+        @* Test 10: RadzenTabs *@
+        <h5>10. RadzenTabs</h5>
+        <p class="text-muted">Tab switching behavior.</p>
+        <RadzenTabs>
+            <Tabs>
+                <RadzenTabsItem Text="Tab 1">
+                    Content of Tab 1. If you can see this, tabs are working.
+                </RadzenTabsItem>
+                <RadzenTabsItem Text="Tab 2">
+                    Content of Tab 2.
+                </RadzenTabsItem>
+            </Tabs>
+        </RadzenTabs>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header bg-info text-white">
+        <h3 class="mb-0">How to Verify</h3>
+    </div>
+    <div class="card-body">
+        <ol>
+            <li>Open browser DevTools (F12) and go to the <strong>Console</strong> tab.</li>
+            <li>Interact with each component above.</li>
+            <li>Look for <code>Refused to execute inline script...</code> or <code>Refused to apply inline style...</code> errors.</li>
+            <li>Switch to <strong>Insecure</strong> mode (<code>"CspMode": "Insecure"</code> in appsettings.json), restart, and verify all components work without CSP errors.</li>
+            <li>Compare the two runs to identify which Radzen components require <code>unsafe-inline</code>.</li>
+        </ol>
+    </div>
+</div>
+
+@code {
+    private bool _isSecure;
+    private bool _buttonClicked;
+    private string _textBoxValue = "";
+    private string _selectedItem = "";
+    private DateTime? _selectedDate;
+
+    private List<DropdownItem> _dropdownItems = new()
+    {
+        new DropdownItem { Id = "1", Name = "Option A" },
+        new DropdownItem { Id = "2", Name = "Option B" },
+        new DropdownItem { Id = "3", Name = "Option C" }
+    };
+
+    private List<SampleItem> _gridData = new()
+    {
+        new SampleItem { Id = 1, Name = "Item 1", Description = "First sample item" },
+        new SampleItem { Id = 2, Name = "Item 2", Description = "Second sample item" },
+        new SampleItem { Id = 3, Name = "Item 3", Description = "Third sample item" }
+    };
+
+    private List<ChartItem> _chartData = new()
+    {
+        new ChartItem { Label = "Q1", Value = 25 },
+        new ChartItem { Label = "Q2", Value = 40 },
+        new ChartItem { Label = "Q3", Value = 35 },
+        new ChartItem { Label = "Q4", Value = 50 }
+    };
+
+    [Inject]
+    private NotificationService? NotificationService { get; set; }
+
+    protected override void OnInitialized()
+    {
+        var mode = Configuration.GetValue<string>("CspMode") ?? "Secure";
+        _isSecure = mode.Equals("Secure", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void ShowNotification()
+    {
+        NotificationService?.Notify(new NotificationMessage
+        {
+            Severity = NotificationSeverity.Info,
+            Summary = "CSP Test",
+            Detail = "If you see this notification, RadzenNotification is working.",
+            Duration = 4000
+        });
+    }
+
+    private record DropdownItem
+    {
+        public string Id { get; set; } = "";
+        public string Name { get; set; } = "";
+    }
+
+    private record SampleItem
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+        public string Description { get; set; } = "";
+    }
+
+    private record ChartItem
+    {
+        public string Label { get; set; } = "";
+        public double Value { get; set; }
+    }
+}

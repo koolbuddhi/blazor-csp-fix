@@ -1,0 +1,60 @@
+@using BlazorCspDemo.Services
+@inject BlazorNonceService NonceService
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <link rel="stylesheet" href="bootstrap/bootstrap.min.css" />
+    <link rel="stylesheet" href="app.css" />
+    <link rel="stylesheet" href="BlazorCspDemo.styles.css" />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <RadzenTheme Theme="material" @rendermode="InteractiveServer" />
+    <HeadOutlet @rendermode="InteractiveServer" />
+</head>
+
+<body>
+    <Routes @rendermode="InteractiveServer" />
+
+    <div id="blazor-error-ui">
+        An unhandled error has occurred.
+        <a href="" class="reload">Reload</a>
+        <a class="dismiss">X</a>
+    </div>
+
+    @* Blazor framework script — nonce applied *@
+    <script src="_framework/blazor.web.js" nonce="@_nonce"></script>
+
+    @* Radzen JS — nonce applied *@
+    <script src="_content/Radzen.Blazor/Radzen.Blazor.js" nonce="@_nonce"></script>
+
+    @* External CSP test script *@
+    <script src="js/csp-test.js" nonce="@_nonce"></script>
+
+    @* DEMO: Inline script with nonce — works in Secure mode because it carries the nonce *@
+    <script nonce="@_nonce">
+        console.log('[CSP Demo] Inline script with nonce executed successfully.');
+        window.__cspNoncePresent = true;
+    </script>
+</body>
+
+</html>
+
+@code {
+    private string _nonce = string.Empty;
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    protected override void OnInitialized()
+    {
+        if (HttpContext?.Items["csp-nonce"] is string nonce)
+        {
+            _nonce = nonce;
+            NonceService.Nonce = nonce;
+        }
+    }
+}
