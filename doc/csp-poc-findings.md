@@ -319,6 +319,46 @@ Audit all file upload endpoints and ensure:
 
 ---
 
+## Finding 6: No Blazor UI Library Supports Strict style-src
+
+### Problem
+
+Given that `style-src 'unsafe-inline'` is required for Radzen, we evaluated whether switching to an alternative Blazor component library would eliminate the ZAP Medium finding.
+
+### Libraries Evaluated
+
+| Library | script-src nonce | style-src nonce | Needs unsafe-inline (styles) | Needs unsafe-eval | Notes |
+|---------|:---:|:---:|:---:|:---:|-------|
+| **Radzen** (current) | Yes | No | Yes | No | [Issue #526](https://github.com/radzenhq/radzen-blazor/issues/526) — no fix planned |
+| **MudBlazor** | Yes | No | Yes | No | [Issue #4529](https://github.com/MudBlazor/MudBlazor/issues/4529) — open, unresolved |
+| **FluentUI Blazor** | Partial | No | Yes | Yes (some) | [Issue #2783](https://github.com/microsoft/fluentui-blazor/issues/2783) — requires `unsafe-eval` |
+| **Syncfusion** | No | No | Yes | Yes | Explicitly rejects nonce support — architectural decision |
+| **Telerik** | No | No | Yes | Yes | Feature request filed, no timeline |
+| **DevExpress** | No | Partial | Conditional | Yes | Best partial support, but still needs `unsafe-eval` |
+| **Ant Design Blazor** | No | No | Yes | Yes | CSS Isolation doesn't work; forces inline styles |
+
+### Root Cause
+
+This is not a library-specific problem. It is a **fundamental incompatibility** between:
+
+1. **CSP spec limitation**: Nonces can only protect `<style>` elements, not inline `style=""` attributes on HTML elements. No mechanism exists in CSP Level 2 or 3 to allow specific inline style attributes via nonce or hash.
+
+2. **Blazor component architecture**: All Blazor component libraries use inline `style=""` attributes for dynamic sizing, positioning, and visibility (e.g., `display:none` on popup panels, `width:300px` on inputs, column widths in data grids). This is how Blazor renders component parameters like `Style="..."`.
+
+### Conclusion
+
+- **Switching libraries will not fix the ZAP Medium finding** — every library has the same limitation
+- Radzen is actually one of the **better** options: it only needs `'unsafe-inline'` in `style-src`. Most alternatives additionally need `'unsafe-eval'` in `script-src`, which is strictly worse
+- The only path to eliminate `'unsafe-inline'` from `style-src` is the **CSS Override approach**: replicate critical inline styles via CSS class rules in a nonced `<style>` block or external stylesheet
+
+### What This Means for the Production App
+
+1. Do NOT switch UI libraries solely to fix this CSP finding — it won't help
+2. If switching libraries for other reasons, Radzen or MudBlazor are the best CSP options (no `unsafe-eval` needed)
+3. The CSS Override approach (documented below) is the recommended technical path
+
+---
+
 ## Final CSP Header (Production)
 
 This is the validated CSP header from the POC:
