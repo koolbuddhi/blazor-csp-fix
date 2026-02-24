@@ -1,0 +1,92 @@
+/*
+ * Radzen CSP Overrides
+ *
+ * These CSS rules replicate the critical inline styles that Radzen components
+ * generate via style="" attributes. When CSP blocks inline styles (strict
+ * style-src without 'unsafe-inline'), these rules ensure components render
+ * correctly during SSR.
+ *
+ * Note: JavaScript DOM style manipulation (element.style.x = ...) is NOT
+ * blocked by CSP style-src — only HTML inline style="" attributes are.
+ * So interactive behavior (opening dropdowns, positioning popups) still
+ * works after Blazor's SignalR circuit takes over.
+ */
+
+/* ============================================================
+ * 1. Popup / Dropdown Panels — must be hidden on initial render
+ * ============================================================ */
+
+/* RadzenDropDown: panel that holds the dropdown options list */
+.rz-dropdown-panel {
+    display: none;
+    box-sizing: border-box;
+}
+
+/* RadzenDropDown: scrollable wrapper inside the panel */
+.rz-dropdown-items-wrapper {
+    max-height: 200px;
+    overflow-x: hidden;
+}
+
+/* RadzenDatePicker: popup calendar container */
+.rz-datepicker-popup-container {
+    display: none;
+}
+
+/* ============================================================
+ * 2. Calendar / DatePicker internals
+ * ============================================================ */
+
+.rz-calendar-view.rz-calendar-month-view {
+    width: 100%;
+}
+
+/* ============================================================
+ * 3. SVG / Chart defaults
+ * ============================================================ */
+
+.rz-chart svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+/* Axis and tick lines only — do NOT set fill:none on all paths,
+   as that removes the fill color from data bar/series paths */
+.rz-chart svg path.rz-line,
+.rz-chart svg path.rz-tick-line {
+    fill: none;
+    stroke-width: 1;
+}
+
+/* ============================================================
+ * 4. Component sizing — replacements for inline Style params
+ *    Use these CSS classes instead of Style="..." on components
+ * ============================================================ */
+
+/* Width 300px — for dropdowns, datepickers */
+.csp-w-300 {
+    width: 300px;
+}
+
+/* Height 200px — for charts */
+.csp-h-200 {
+    height: 200px;
+}
+
+/* Height 24px — for progress bars */
+.csp-h-24 {
+    height: 24px;
+}
+
+/* Margin bottom 1rem — for data grids */
+.csp-mb-1 {
+    margin-bottom: 1rem;
+}
+
+/* Code block styling — replacement for inline style on <pre> */
+.csp-code-block {
+    background: #f5f5f5;
+    padding: 1rem;
+    border-radius: 4px;
+}

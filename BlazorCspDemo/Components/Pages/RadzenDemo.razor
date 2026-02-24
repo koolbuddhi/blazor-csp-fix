@@ -26,7 +26,7 @@
         <h3>Radzen's Official CSP Requirements</h3>
     </div>
     <div class="card-body">
-        <pre style="background: #f5f5f5; padding: 1rem; border-radius: 4px;">script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' 'unsafe-inline'
+        <pre class="csp-code-block">script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval' 'unsafe-inline'
 style-src 'self' 'unsafe-inline'</pre>
         <p class="text-muted mt-2">
             This effectively disables CSP protection for scripts and styles.
@@ -70,7 +70,7 @@ style-src 'self' 'unsafe-inline'</pre>
         <p class="text-muted">Known to generate inline scripts (<a href="https://github.com/radzenhq/radzen-blazor/issues/526" target="_blank">issue #526</a>). May trigger CSP violation in Secure mode.</p>
         <RadzenDropDown @bind-Value="_selectedItem" Data="@_dropdownItems"
                         TextProperty="Name" ValueProperty="Id"
-                        Placeholder="Select an item..." Style="width: 300px;" />
+                        Placeholder="Select an item..." class="csp-w-300" />
         @if (!string.IsNullOrEmpty(_selectedItem))
         {
             <span class="ms-2">Selected: @_selectedItem</span>
@@ -81,7 +81,7 @@ style-src 'self' 'unsafe-inline'</pre>
         @* Test 4: RadzenDataGrid *@
         <h5>4. RadzenDataGrid</h5>
         <p class="text-muted">Complex rendering — inline styles likely for column sizing.</p>
-        <RadzenDataGrid Data="@_gridData" TItem="SampleItem" Style="margin-bottom: 1rem;">
+        <RadzenDataGrid Data="@_gridData" TItem="SampleItem" class="csp-mb-1">
             <Columns>
                 <RadzenDataGridColumn TItem="SampleItem" Property="Id" Title="ID" Width="80px" />
                 <RadzenDataGridColumn TItem="SampleItem" Property="Name" Title="Name" />
@@ -110,7 +110,7 @@ style-src 'self' 'unsafe-inline'</pre>
         @* Test 6: RadzenDatePicker *@
         <h5>6. RadzenDatePicker</h5>
         <p class="text-muted">Popup behavior — JavaScript navigation may be affected.</p>
-        <RadzenDatePicker @bind-Value="_selectedDate" DateFormat="yyyy-MM-dd" Style="width: 300px;" />
+        <RadzenDatePicker @bind-Value="_selectedDate" DateFormat="yyyy-MM-dd" class="csp-w-300" />
         @if (_selectedDate.HasValue)
         {
             <span class="ms-2">Selected: @_selectedDate.Value.ToString("yyyy-MM-dd")</span>
@@ -121,7 +121,7 @@ style-src 'self' 'unsafe-inline'</pre>
         @* Test 7: RadzenChart *@
         <h5>7. RadzenChart</h5>
         <p class="text-muted">SVG rendering — inline styles for sizing.</p>
-        <RadzenChart Style="height: 200px;">
+        <RadzenChart class="csp-h-200">
             <RadzenColumnSeries Data="@_chartData" CategoryProperty="Label" ValueProperty="Value" />
             <RadzenCategoryAxis />
             <RadzenValueAxis />
@@ -140,7 +140,7 @@ style-src 'self' 'unsafe-inline'</pre>
         @* Test 9: RadzenProgressBar *@
         <h5>9. RadzenProgressBar</h5>
         <p class="text-muted">Animated rendering — inline styles for width.</p>
-        <RadzenProgressBar Value="65" Style="height: 24px;" />
+        <RadzenProgressBar Value="65" class="csp-h-24" />
 
         <hr />
 
