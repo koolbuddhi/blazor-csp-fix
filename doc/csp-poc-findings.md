@@ -14,28 +14,34 @@ This document captures the findings from the proof-of-concept (POC) project that
 6. [Finding 3: connect-src Must Restrict WebSocket Hosts](#finding-3-connect-src-must-restrict-websocket-hosts)
 7. [Finding 4: Static Files Need Security Headers Too](#finding-4-static-files-need-security-headers-too)
 8. [Finding 5: File Uploads Can Bypass CSP via self](#finding-5-file-uploads-can-bypass-csp-via-self)
-9. [Final CSP Header (Production)](#final-csp-header-production)
-10. [Step-by-Step Migration Guide](#step-by-step-migration-guide)
-11. [OWASP ZAP Scan Results](#owasp-zap-scan-results)
-12. [Security Trade-off Justification](#security-trade-off-justification)
-13. [Testing Checklist](#testing-checklist)
+9. [Finding 6: No Blazor UI Library Supports Strict style-src](#finding-6-no-blazor-ui-library-supports-strict-style-src)
+10. [Finding 7: CSS Override Approach Eliminates unsafe-inline from style-src](#finding-7-css-override-approach-eliminates-unsafe-inline-from-style-src)
+11. [Final CSP Header (Production)](#final-csp-header-production)
+12. [Step-by-Step Migration Guide](#step-by-step-migration-guide)
+13. [OWASP ZAP Scan Results](#owasp-zap-scan-results)
+14. [Security Trade-off Justification](#security-trade-off-justification)
+15. [Testing Checklist](#testing-checklist)
 
 ---
 
 ## Executive Summary
 
-| Aspect | Before (Insecure) | After (Secure) |
-|--------|-------------------|----------------|
-| `script-src` | `'self' 'unsafe-inline' 'unsafe-eval'` | `'self' 'nonce-{per-request}'` |
-| `style-src` | `'self' 'unsafe-inline'` | `'self' 'unsafe-inline'` |
-| `connect-src` | `'self' wss: ws:` | `'self' wss://{host} ws://{host}` |
-| XSS via inline script | Possible | Blocked |
-| XSS via eval() | Possible | Blocked |
-| XSS via dynamic script injection | Possible | Blocked |
-| Radzen components work | Yes | Yes |
-| Blazor SignalR works | Yes | Yes |
+| Aspect | Before (Insecure) | After (Secure) | After (CSS Override) |
+|--------|-------------------|----------------|---------------------|
+| `script-src` | `'self' 'unsafe-inline' 'unsafe-eval'` | `'self' 'nonce-{per-request}'` | `'self' 'nonce-{per-request}'` |
+| `style-src` | `'self' 'unsafe-inline'` | `'self' 'unsafe-inline'` | `'self' 'nonce-{per-request}'` |
+| `connect-src` | `'self' wss: ws:` | `'self' wss://{host} ws://{host}` | `'self' wss://{host} ws://{host}` |
+| XSS via inline script | Possible | Blocked | Blocked |
+| XSS via eval() | Possible | Blocked | Blocked |
+| XSS via dynamic script injection | Possible | Blocked | Blocked |
+| CSS injection via inline styles | Possible | Possible | Blocked |
+| Radzen components work | Yes | Yes | Yes |
+| Blazor SignalR works | Yes | Yes | Yes |
 
-**Key outcome**: `unsafe-inline` and `unsafe-eval` are fully removed from `script-src`. The only remaining `unsafe-inline` is in `style-src`, which is an accepted trade-off documented below.
+**Key outcome**: Two validated paths exist:
+
+1. **Secure (default)**: `unsafe-inline` and `unsafe-eval` removed from `script-src`. `style-src` keeps `'unsafe-inline'` as an accepted trade-off.
+2. **CSS Override (strict)**: `unsafe-inline` removed from **both** `script-src` and `style-src`. Critical Radzen inline styles are replicated via an external CSS override file. See [Finding 7](#finding-7-css-override-approach-eliminates-unsafe-inline-from-style-src).
 
 ---
 
@@ -355,13 +361,169 @@ This is not a library-specific problem. It is a **fundamental incompatibility** 
 
 1. Do NOT switch UI libraries solely to fix this CSP finding — it won't help
 2. If switching libraries for other reasons, Radzen or MudBlazor are the best CSP options (no `unsafe-eval` needed)
-3. The CSS Override approach (documented below) is the recommended technical path
+3. The CSS Override approach (documented in [Finding 7](#finding-7-css-override-approach-eliminates-unsafe-inline-from-style-src)) is the recommended technical path
+
+---
+
+## Finding 7: CSS Override Approach Eliminates unsafe-inline from style-src
+
+### Problem
+
+Findings 2 and 6 established that `style-src 'unsafe-inline'` was required because:
+- Radzen components use inline `style=""` attributes for sizing, positioning, and visibility
+- CSP nonces cannot protect inline `style=""` attributes (only `<style>` elements)
+- No alternative Blazor UI library solves this
+
+This resulted in a ZAP Medium finding (rule 10055) that could not be resolved.
+
+### Key Insight
+
+CSP `style-src` only blocks inline `style=""` attributes **in the HTML markup** (during SSR). It does **NOT** block JavaScript DOM style manipulation (`element.style.display = 'block'`). This means:
+
+1. **SSR render** — Inline `style=""` attributes are blocked by CSP. Components that rely on `style="display:none"` to hide popups will render incorrectly.
+2. **After Blazor takes over** — Radzen's JavaScript manipulates styles via the DOM API, which is controlled by `script-src` (nonce-protected), not `style-src`. Interactive behavior works normally.
+
+The CSS Override approach exploits this by providing **correct default CSS states** for the SSR render via an external stylesheet, while letting Radzen's JavaScript handle dynamic state changes after the SignalR circuit connects.
+
+### Solution
+
+Three changes are required:
+
+**1. Create `wwwroot/css/radzen-csp-overrides.css`** — External stylesheet that replicates the critical inline styles Radzen generates:
+
+```css
+/* Popup panels — must be hidden on initial render */
+.rz-dropdown-panel {
+    display: none;
+    box-sizing: border-box;
+}
+
+.rz-dropdown-items-wrapper {
+    max-height: 200px;
+    overflow-x: hidden;
+}
+
+.rz-datepicker-popup-container {
+    display: none;
+}
+
+/* Calendar internals */
+.rz-calendar-view.rz-calendar-month-view {
+    width: 100%;
+}
+
+/* Chart SVG — only target axis/tick lines, NOT data series */
+.rz-chart svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+.rz-chart svg path.rz-line,
+.rz-chart svg path.rz-tick-line {
+    fill: none;
+    stroke-width: 1;
+}
+
+/* Component sizing classes (replace inline Style params) */
+.csp-w-300 { width: 300px; }
+.csp-h-200 { height: 200px; }
+.csp-h-24  { height: 24px; }
+.csp-mb-1  { margin-bottom: 1rem; }
+```
+
+**2. Replace inline `Style` parameters on components** with CSS classes:
+
+```razor
+@* BEFORE: inline style blocked by CSP *@
+<RadzenDropDown Style="width: 300px;" ... />
+<RadzenChart Style="height: 200px;">
+<RadzenProgressBar Style="height: 24px;" />
+
+@* AFTER: CSS class not blocked by CSP *@
+<RadzenDropDown class="csp-w-300" ... />
+<RadzenChart class="csp-h-200">
+<RadzenProgressBar class="csp-h-24" />
+```
+
+**3. Change CSP middleware** to use nonce-based `style-src`:
+
+```csharp
+// BEFORE:
+var styleSrc = "style-src 'self' 'unsafe-inline'";
+
+// AFTER:
+var styleSrc = $"style-src 'self' 'nonce-{nonce}'";
+```
+
+### Inline Styles Identified and Overridden
+
+43 elements with inline `style=""` attributes were identified on the Radzen demo page:
+
+| Element / Class | Inline Style | CSS Override | Critical? |
+|----------------|-------------|-------------|:---------:|
+| `.rz-dropdown-panel` | `display:none; box-sizing:border-box` | `.rz-dropdown-panel { display:none; box-sizing:border-box }` | Yes |
+| `.rz-datepicker-popup-container` | `display:none` | `.rz-datepicker-popup-container { display:none }` | Yes |
+| `.rz-dropdown-items-wrapper` | `max-height:200px; overflow-x:hidden` | `.rz-dropdown-items-wrapper { max-height:200px; overflow-x:hidden }` | Yes |
+| `.rz-calendar-view.rz-calendar-month-view` | `width:100%` | Same selector in CSS | Medium |
+| `.rz-chart svg` | `width:100%; height:100%; overflow:visible` | Same selector in CSS | Medium |
+| `path.rz-line`, `path.rz-tick-line` | `fill:none; stroke-width:1` | Targeted CSS rule | Low |
+| Component `Style` params | `width:300px`, `height:200px`, etc. | CSS classes (`csp-w-300`, etc.) | Low |
+| SVG data bar paths | `stroke-width:0; clip-path:url(...)` | Not overridden — fill comes from Radzen theme CSS variables | No |
+| `col` elements (grid columns) | `width:80px` | Not overridden — grid renders acceptably without | No |
+
+### Validation Results
+
+All 10 Radzen components tested with strict `style-src 'self' 'nonce-{value}'`:
+
+| Component | Visual Render (SSR) | Interactive Behavior | CSP Console Errors |
+|-----------|:---:|:---:|:---:|
+| RadzenButton | OK | OK — click handler fires | None |
+| RadzenTextBox | OK | OK — text input works | None |
+| RadzenDropDown | OK — panel hidden | OK — popup opens on click, selection works | None |
+| RadzenDataGrid | OK — column widths correct | OK — data displays | None |
+| RadzenAccordion | OK — items collapse/expand | OK | None |
+| RadzenDatePicker | OK — calendar hidden | OK — popup opens, date selection works | None |
+| RadzenChart | OK — bars filled, correct height | OK — tooltips work | None |
+| RadzenNotification | OK | OK — notifications appear | None |
+| RadzenProgressBar | OK — 65% fill, correct height | OK | None |
+| RadzenTabs | OK — tab switching works | OK | None |
+
+### Important Caveat: Chart SVG Override
+
+The initial CSS override included a broad rule `.rz-chart svg path { fill: none; }` which inadvertently removed the fill color from chart data bars (they rendered as outlines instead of solid fills). This was fixed by targeting only axis/tick line paths:
+
+```css
+/* WRONG — removes fill from data bars too */
+.rz-chart svg path { fill: none; stroke-width: 1; }
+
+/* CORRECT — only targets axis and tick lines */
+.rz-chart svg path.rz-line,
+.rz-chart svg path.rz-tick-line { fill: none; stroke-width: 1; }
+```
+
+Data bar fills come from Radzen's theme CSS custom properties (e.g., `--rz-series-1: #3700b3`) and are applied via the theme stylesheet, not inline styles.
+
+### What This Means for the Production App
+
+1. **The CSS Override approach works** — it eliminates `'unsafe-inline'` from `style-src` entirely
+2. **Additional overrides may be needed** if the production app uses Radzen components not tested in this POC (e.g., RadzenDialog, RadzenMenu, RadzenSplitter). Each new component should be tested to identify any inline styles that need CSS equivalents.
+3. **Maintenance cost**: When Radzen is updated, new inline styles may be introduced that require additional CSS overrides. Test after every Radzen version update.
+4. **Two valid paths** exist for production:
+   - **Accept risk** — Keep `style-src 'unsafe-inline'` with the documented risk acceptance (simpler, no maintenance overhead)
+   - **CSS Override** — Use nonce-based `style-src` with the override stylesheet (stricter, requires ongoing maintenance)
+
+### Branch
+
+This implementation is on branch `feature/css-override-style-src` (commit `47fe2ed`).
 
 ---
 
 ## Final CSP Header (Production)
 
-This is the validated CSP header from the POC:
+Two validated options exist. Choose based on your risk tolerance and maintenance capacity.
+
+### Option A: Accepted Risk (Default)
 
 ```
 Content-Security-Policy:
@@ -376,13 +538,37 @@ Content-Security-Policy:
   form-action 'self'
 ```
 
+- Simpler to maintain
+- `style-src 'unsafe-inline'` triggers ZAP Medium finding (rule 10055) — accepted via risk acceptance document
+- No CSS override file to maintain
+
+### Option B: CSS Override (Strict)
+
+```
+Content-Security-Policy:
+  default-src 'self';
+  script-src 'self' 'nonce-{per-request-value}';
+  style-src 'self' 'nonce-{per-request-value}';
+  img-src 'self' data:;
+  font-src 'self';
+  connect-src 'self' wss://{host} ws://{host};
+  frame-ancestors 'none';
+  base-uri 'self';
+  form-action 'self'
+```
+
+- Eliminates all `unsafe-inline` directives — resolves ZAP Medium finding
+- Requires `wwwroot/css/radzen-csp-overrides.css` to replicate critical Radzen inline styles
+- Requires replacing `Style="..."` on components with CSS classes
+- Must be re-tested after Radzen version updates
+
 ### Directive-by-Directive Explanation
 
 | Directive | Value | Why |
 |-----------|-------|-----|
 | `default-src` | `'self'` | Fallback: only allow same-origin resources |
 | `script-src` | `'self' 'nonce-...'` | Scripts must be from same origin with a matching nonce. Blocks all inline scripts, eval(), and dynamic script injection. |
-| `style-src` | `'self' 'unsafe-inline'` | Allows same-origin stylesheets and inline styles. Required for Radzen component rendering. |
+| `style-src` | `'self' 'unsafe-inline'` (Option A) or `'self' 'nonce-...'` (Option B) | Option A: allows inline styles for Radzen. Option B: nonce-based with CSS override file. |
 | `img-src` | `'self' data:` | Same-origin images plus data: URIs (used by some components for inline icons). |
 | `font-src` | `'self'` | Same-origin fonts only. Add CDN origins if using Google Fonts, etc. |
 | `connect-src` | `'self' wss://{host} ws://{host}` | Same-origin XHR/fetch plus WebSocket to same host only. Required for Blazor SignalR. |
@@ -439,7 +625,7 @@ public class BlazorNonceService : CircuitHandler
 - Generate 32-byte nonce per request
 - Store in `HttpContext.Items["csp-nonce"]`
 - Build CSP header with `script-src 'self' 'nonce-{nonce}'`
-- Use `style-src 'self' 'unsafe-inline'`
+- Use `style-src 'self' 'unsafe-inline'` (Option A) or `style-src 'self' 'nonce-{nonce}'` (Option B — CSS Override)
 - Derive `connect-src` from `context.Request.Host`
 
 ### Step 3: Register in Program.cs
@@ -535,7 +721,7 @@ dotnet test
 
 ## OWASP ZAP Scan Results
 
-### Full Scan Summary (Secure Mode - After All Fixes)
+### Full Scan Summary: Option A (Accepted Risk — style-src unsafe-inline)
 
 | Category | Count | Details |
 |----------|-------|---------|
@@ -543,9 +729,8 @@ dotnet test
 | **SKIP** | 7 | SQL injection and OS command injection (disabled in config - not applicable) |
 | **WARN** | 4 | See below |
 | **FAIL** | 1 | See below |
-| **Medium** | 0 | Previously 1, now resolved |
 
-### Warnings (Accepted)
+#### Warnings (Accepted)
 
 | Rule | Finding | Justification |
 |------|---------|---------------|
@@ -554,7 +739,26 @@ dotnet test
 | 10110 | Dangerous JS Functions in csp-test.js | Test file intentionally uses eval() to demonstrate CSP blocking. |
 | 90004 | Cross-Origin-Resource-Policy missing | Informational. Not a vulnerability for same-origin apps. |
 
-### Remaining FAIL (Low Priority)
+### Full Scan Summary: Option B (CSS Override — nonce-based style-src)
+
+| Category | Count | Details |
+|----------|-------|---------|
+| **PASS** | **131** | Same comprehensive coverage as Option A |
+| **SKIP** | 7 | SQL injection and OS command injection (disabled in config) |
+| **WARN** | **3** | **One fewer than Option A** — `style-src unsafe-inline` warning is eliminated |
+| **FAIL** | 1 | Same as Option A (X-Content-Type-Options on static files) |
+
+#### Warnings (Option B)
+
+| Rule | Finding | Justification |
+|------|---------|---------------|
+| 10063 | Permissions-Policy not set on static files | Static files bypass middleware. Low risk. |
+| 10110 | Dangerous JS Functions in csp-test.js | Test file intentionally uses eval() to demonstrate CSP blocking. |
+| 90004 | Cross-Origin-Resource-Policy missing | Informational. Not a vulnerability for same-origin apps. |
+
+**Key improvement**: The `style-src unsafe-inline` warning (rule 10055) is **completely eliminated** with the CSS Override approach. This resolves the ZAP Medium finding without breaking any Radzen component functionality.
+
+### Remaining FAIL (Low Priority — Both Options)
 
 | Rule | Finding | Remediation |
 |------|---------|-------------|
@@ -575,7 +779,9 @@ These are disabled in `zap-config.conf` because they're irrelevant to the app ar
 
 ## Security Trade-off Justification
 
-### Why unsafe-inline in style-src is Acceptable
+> **Note**: If using Option B (CSS Override), the trade-off described below is **fully resolved** — `unsafe-inline` is eliminated from all CSP directives. The justification below applies only to Option A (Accepted Risk).
+
+### Why unsafe-inline in style-src is Acceptable (Option A Only)
 
 Present this to the security review team:
 
@@ -659,6 +865,7 @@ These are the key files from the POC that you should reference or copy:
 | `BlazorCspDemo/Middleware/CspMiddleware.cs` | CSP header generation with nonce | Yes (adapt namespace) |
 | `BlazorCspDemo/Services/BlazorNonceService.cs` | Nonce holder for SignalR circuits | Yes (adapt namespace) |
 | `BlazorCspDemo/Components/App.razor` | Nonce wiring into script tags | Reference for pattern |
+| `BlazorCspDemo/wwwroot/css/radzen-csp-overrides.css` | CSS overrides for strict style-src | Yes, if using Option B (CSS Override) |
 | `BlazorCspDemo.Tests/Scripts/security-scan.sh` | Automated security header checks | Yes (adapt URLs/ports) |
 | `BlazorCspDemo.Tests/Scripts/zap-config.conf` | ZAP scan rule configuration | Yes (re-enable DB rules if needed) |
 | `BlazorCspDemo.Tests/Integration/CspSecureHeaderTests.cs` | Integration test examples | Reference for writing tests |
