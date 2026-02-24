@@ -18,7 +18,7 @@ A security review flagged our Blazor Server application for using `unsafe-inline
 
 - **`unsafe-eval` is NOT required** for pure Blazor Server apps. It's only needed for Blazor WebAssembly (which uses `wasm-unsafe-eval`). If your app is purely Blazor Server, remove `unsafe-eval` entirely.
 - **`unsafe-inline` for scripts** can be replaced with a per-request cryptographic **nonce** applied to legitimate `<script>` tags.
-- **`unsafe-inline` for styles** can be replaced with nonces, though some third-party component libraries (Syncfusion, Telerik, DevExpress) may still require it. Audit your dependencies.
+- **`unsafe-inline` for styles** cannot be fully replaced with nonces when using component libraries like Radzen, Syncfusion, Telerik, or DevExpress. CSP nonces only protect `<style>` tags — they cannot protect inline `style=""` attributes on elements, which these libraries use extensively. See `doc/csp-poc-findings.md` for the full analysis. The accepted trade-off is to keep `'unsafe-inline'` in `style-src` while making `script-src` strictly nonce-based.
 
 ---
 
@@ -118,14 +118,19 @@ public class CspMiddleware
         context.Items["csp-nonce"] = nonce;
 
         // Set CSP header on the response
-        // IMPORTANT: Do NOT include 'unsafe-inline' or 'unsafe-eval'
+        // IMPORTANT: Do NOT include 'unsafe-inline' or 'unsafe-eval' in script-src
+        var host = context.Request.Host.ToString();
         var csp = string.Join("; ",
             $"default-src 'self'",
             $"script-src 'self' 'nonce-{nonce}'",
-            $"style-src 'self' 'nonce-{nonce}'",
+            // style-src uses 'unsafe-inline' because CSP nonces cannot protect
+            // inline style="" attributes on elements (only <style> tags).
+            // Radzen/Syncfusion/Telerik require element-level inline styles.
+            $"style-src 'self' 'unsafe-inline'",
             $"img-src 'self' data:",
             $"font-src 'self'",
-            $"connect-src 'self' wss:",  // wss: needed for SignalR WebSocket
+            // Restrict WebSocket to app's own host (not bare wss: which allows any host)
+            $"connect-src 'self' wss://{host} ws://{host}",
             $"frame-ancestors 'none'",
             $"base-uri 'self'",
             $"form-action 'self'"
@@ -148,8 +153,9 @@ public static class CspMiddlewareExtensions
 
 **Important notes on the CSP directives:**
 
-- `connect-src 'self' wss:` — the `wss:` is required for Blazor Server's SignalR WebSocket connection. Without it, the real-time connection will fail.
-- If you use external CDNs (e.g., Bootstrap from a CDN, Google Fonts), add those origins explicitly (e.g., `style-src 'self' 'nonce-{nonce}' https://fonts.googleapis.com`).
+- `connect-src 'self' wss://{host} ws://{host}` — WebSocket access is restricted to the app's own host for Blazor Server's SignalR connection. Do NOT use bare `wss:` as it allows connections to any host (ZAP 10055 medium finding).
+- `style-src 'self' 'unsafe-inline'` — required for Radzen and other UI libraries that use inline `style=""` attributes. CSP nonces cannot protect element-level inline styles (only `<style>` tags). See `doc/csp-poc-findings.md` for full analysis.
+- If you use external CDNs (e.g., Bootstrap from a CDN, Google Fonts), add those origins explicitly (e.g., `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com`).
 - `frame-ancestors 'none'` prevents clickjacking (equivalent to `X-Frame-Options: DENY`).
 
 ---
@@ -295,7 +301,7 @@ Check if you use any of these and follow their specific CSP guidance:
 | **Telerik** | Requires `unsafe-inline` in `style-src` for dynamic sizing; versions 6.x need `unsafe-eval` for Spreadsheet component |
 | **DevExpress** | Supports nonce-based CSP via `.Nonce()` method; Knockout templates still need `unsafe-eval` |
 | **MudBlazor** | Generally CSP-compatible; audit for inline styles |
-| **Radzen** | Check their latest docs for CSP support |
+| **Radzen** | Requires `unsafe-inline` in `style-src` for element-level inline styles (display:none, width, etc.). Does not plan to support strict CSP ([issue #526](https://github.com/radzenhq/radzen-blazor/issues/526)). |
 
 **If a third-party library forces you to keep `unsafe-inline` for styles only**, this is a common acceptable compromise. Document it explicitly for the security reviewer:
 
@@ -339,9 +345,10 @@ After implementing the changes, verify each of these:
 Open browser DevTools → Network tab → check the response headers on the initial page load:
 
 - [ ] `Content-Security-Policy` header is present
-- [ ] Header does NOT contain `unsafe-inline` in `script-src`
+- [ ] Header does NOT contain `unsafe-inline` in `script-src` (it IS expected in `style-src`)
 - [ ] Header does NOT contain `unsafe-eval` in `script-src`
 - [ ] Header contains `nonce-` value in `script-src`
+- [ ] `connect-src` contains host-specific `wss://` URL, not bare `wss:`
 - [ ] Nonce value changes on each page refresh (verify by reloading)
 
 ### 3. Console Error Check
@@ -397,13 +404,14 @@ public async Task InvokeAsync(HttpContext context)
     else
     {
         // Strict CSP for production
+        var host = context.Request.Host.ToString();
         csp = string.Join("; ",
             $"default-src 'self'",
             $"script-src 'self' 'nonce-{nonce}'",
-            $"style-src 'self' 'nonce-{nonce}'",
+            $"style-src 'self' 'unsafe-inline'",
             $"img-src 'self' data:",
             $"font-src 'self'",
-            $"connect-src 'self' wss:",
+            $"connect-src 'self' wss://{host} ws://{host}",
             $"frame-ancestors 'none'",
             $"base-uri 'self'",
             $"form-action 'self'"

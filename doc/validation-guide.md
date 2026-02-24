@@ -25,14 +25,15 @@ The app starts in Secure mode (`"CspMode": "Secure"` in `appsettings.json`).
 **Expected:**
 ```
 script-src 'self' 'nonce-<base64value>'
-style-src 'self' 'nonce-<base64value>'
+style-src 'self' 'unsafe-inline'
+connect-src 'self' wss://localhost:5001 ws://localhost:5001
 ```
 
 **Verify:**
 - [ ] Header is present
-- [ ] Contains `nonce-` in both `script-src` and `style-src`
-- [ ] Does **NOT** contain `unsafe-inline`
-- [ ] Does **NOT** contain `unsafe-eval`
+- [ ] `script-src` contains `nonce-` and does NOT contain `unsafe-inline` or `unsafe-eval`
+- [ ] `style-src` contains `'unsafe-inline'` (required for Radzen component rendering)
+- [ ] `connect-src` has host-specific `wss://` URL, NOT bare `wss:`
 
 ### 1.2 Verify Nonce Rotates
 
